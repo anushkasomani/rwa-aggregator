@@ -1,0 +1,33 @@
+{
+  "name": "kamino",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "watch": "tsc -w"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^24.2.1",
+    "dotenv": "^17.2.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@kamino-finance/klend-sdk": "^7.0.7",
+    "@solana-program/token": "^0.5.1",
+    "@solana/kit": "^2.3.0",
+    "@solana/sysvars": "^2.3.0",
+    "@solana/web3.js": "^1.98.4",
+    "bn.js": "^5.2.2",
+    "bs58": "^6.0.0",
+    "decimal.js": "^10.6.0"
+  }
+}
