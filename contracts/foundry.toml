@@ -1,6 +1,21 @@
 [profile.default]
-src = "src"
+src = "contracts"
 out = "out"
-libs = ["lib"]
+libs = ["node_modules"]
+test = "test/foundry"
+cache_path = "cache_forge"
 
-# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+# Optimizer
+optimizer = true
+optimizer_runs = 1000
+via_ir = true
+
+# Formatter
+line_length = 120
+tab_width = 4
+bracket_spacing = true
+
+# RPC endpoints
+[rpc_endpoints]
+arbitrum = "https://arb1.arbitrum.io/rpc"
+arbitrum_goerli = "https://goerli-rollup.arbitrum.io/rpc"
