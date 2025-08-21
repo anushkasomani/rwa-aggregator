@@ -1,12 +1,23 @@
-interface IBasketController {
-    function onTokenTransfer(address from, address to, uint256 amount) external;
-}
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "../security/EnhancedReentrancyGuard.sol";
+import "../interfaces/IBasketController.sol";
+import "../interfaces/IOrderRouter.sol";
+import "../interfaces/IERC20Extended.sol";
+import "./BasketToken.sol";
+import "./BasketVault.sol";
+import "../oracles/OracleAggregator.sol";
 
 /**
- * @title BasketController with enhanced security
- * @dev Core logic for basket operations with MEV protection
+ * @title BasketController with complete integration
+ * @dev Core logic for basket operations with all components integrated
  */
 contract BasketController is EnhancedReentrancyGuard, IBasketController {
+    using SafeERC20 for IERC20;
+
     struct BasketInfo {
         address[] assets;
         uint256[] weights; // in basis points (10000 = 100%)
@@ -28,9 +39,10 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
     FeeConfig public feeConfig;
     
     BasketToken public immutable basketToken;
-    address public immutable vault;
+    BasketVault public immutable vault;
     address public immutable baseToken; // USDC
     OracleAggregator public immutable oracle;
+    IOrderRouter public immutable orderRouter;
     
     mapping(address => uint256) public feeDebt;
     uint256 public accFeePerShare;
@@ -42,14 +54,20 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
     uint256 public maxDepositAmount;
     uint256 public maxTotalSupply;
     
-    // MEV protection
-    mapping(bytes32 => uint256) public pendingOperations;
-    uint256 public constant OPERATION_DELAY = 15 minutes;
+    // MEV protection - TODO: Implement time-delayed operations for large transactions
+    // mapping(bytes32 => uint256) public pendingOperations;
+    // uint256 public constant OPERATION_DELAY = 15 minutes;
+    
+    // Constants
+    uint256 public constant BASIS_POINTS = 10000;
+    uint256 public constant MIN_DEPOSIT = 100 * 1e6; // 100 USDC minimum
+    uint256 public constant MAX_SLIPPAGE_BPS = 500; // 5% max slippage
 
     event Deposit(address indexed user, uint256 usdcAmount, uint256 sharesOut);
     event Withdrawal(address indexed user, uint256 sharesIn, uint256 usdcOut);
+    event Rebalance(uint256 timestamp, address[] assets, uint256[] newWeights);
     event EmergencyPaused(string reason);
-    event OperationScheduled(bytes32 indexed operationHash, uint256 executeTime);
+    event FeesCollected(address indexed user, uint256 amount);
 
     modifier onlySecurityCouncil() {
         require(msg.sender == securityCouncil, "Only security council");
@@ -62,8 +80,16 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
     }
 
     modifier withinLimits(uint256 amount) {
+        require(amount >= MIN_DEPOSIT, "Below minimum deposit");
         require(amount <= maxDepositAmount, "Exceeds max deposit");
-        require(basketToken.totalSupply() + amount <= maxTotalSupply, "Exceeds max supply");
+        // Check that minting new shares won't exceed max supply
+        // This is approximate since we don't know exact shares to mint yet
+        uint256 currentSupply = basketToken.totalSupply();
+        if (currentSupply > 0) {
+            uint256 currentNAV = calculateNAV();
+            uint256 approxNewShares = (amount * currentSupply) / currentNAV;
+            require(currentSupply + approxNewShares <= maxTotalSupply, "Exceeds max supply");
+        }
         _;
     }
 
@@ -74,18 +100,23 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
         address _vault,
         address _oracle,
         address _securityCouncil,
+        address _orderRouter,
         string memory _tokenName,
         string memory _tokenSymbol
     ) {
         require(_assets.length == _weights.length, "Length mismatch");
         require(_assets.length >= 3, "Minimum 3 assets required");
+        require(_vault != address(0), "Invalid vault");
+        require(_oracle != address(0), "Invalid oracle");
+        require(_orderRouter != address(0), "Invalid router");
 
         // Validate weights sum to 10000
         uint256 totalWeights;
         for (uint256 i = 0; i < _weights.length; i++) {
+            require(_weights[i] > 0, "Weight must be positive");
             totalWeights += _weights[i];
         }
-        require(totalWeights == 10000, "Weights must sum to 10000");
+        require(totalWeights == BASIS_POINTS, "Weights must sum to 10000");
 
         basketInfo = BasketInfo({
             assets: _assets,
@@ -105,8 +136,9 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
         });
 
         baseToken = _baseToken;
-        vault = _vault;
+        vault = BasketVault(_vault);
         oracle = OracleAggregator(_oracle);
+        orderRouter = IOrderRouter(_orderRouter);
         securityCouncil = _securityCouncil;
         
         basketToken = new BasketToken(_tokenName, _tokenSymbol, address(this));
@@ -134,29 +166,27 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
         // Update streaming fees before minting
         _updateStreamingFees();
 
-        // Calculate entry fee
-        uint256 entryFee = (usdcAmount * feeConfig.entryFeeBps) / 10000;
+        // Calculate shares to mint BEFORE taking user funds to prevent NAV manipulation
+        uint256 currentNAV = calculateNAV();
+        uint256 entryFee = (usdcAmount * feeConfig.entryFeeBps) / BASIS_POINTS;
         uint256 netAmount = usdcAmount - entryFee;
-
-        // Transfer USDC from user
-        IERC20(baseToken).transferFrom(msg.sender, address(this), usdcAmount);
-
-        // Distribute entry fee to existing holders
-        if (basketToken.totalSupply() > 0 && entryFee > 0) {
-            _distributeFee(entryFee);
-        }
-
-        // Calculate shares to mint based on current NAV
-        uint256 currentNAV = _calculateNAV();
         uint256 sharesToMint;
         
         if (basketToken.totalSupply() == 0) {
-            sharesToMint = netAmount; // 1:1 for first deposit
+            sharesToMint = netAmount * 1e12; // Convert from 6 decimals to 18 decimals (USDC to BasketToken)
         } else {
             sharesToMint = (netAmount * basketToken.totalSupply()) / currentNAV;
         }
 
         require(sharesToMint >= minSharesOut, "Insufficient shares out");
+
+        // Transfer USDC from user
+        IERC20(baseToken).safeTransferFrom(msg.sender, address(this), usdcAmount);
+
+        // Distribute entry fee to existing holders
+        if (basketToken.totalSupply() > 0 && entryFee > 0) {
+            _distributeFee(entryFee);
+        }
 
         // Execute trades to buy basket assets
         _executeBuyOrders(netAmount);
@@ -187,26 +217,26 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
 
         // Calculate user's share of vault
         uint256 totalSupply = basketToken.totalSupply();
-        uint256 userShare = (sharesIn * 10000) / totalSupply;
+        uint256 userShareBps = (sharesIn * BASIS_POINTS) / totalSupply;
 
         // Burn shares first to prevent manipulation
         basketToken.burn(msg.sender, sharesIn);
 
         // Execute sell orders
-        uint256 usdcReceived = _executeSellOrders(userShare);
+        uint256 usdcReceived = _executeSellOrders(userShareBps);
 
         // Calculate performance fee if above high water mark
-        uint256 currentNAV = _calculateNAV();
+        uint256 currentNAV = calculateNAV();
         uint256 performanceFee = 0;
         
         if (currentNAV > basketInfo.highWaterMark) {
             uint256 profit = ((currentNAV - basketInfo.highWaterMark) * usdcReceived) / currentNAV;
-            performanceFee = (profit * feeConfig.performanceFeeBps) / 10000;
+            performanceFee = (profit * feeConfig.performanceFeeBps) / BASIS_POINTS;
             basketInfo.highWaterMark = currentNAV;
         }
 
         // Calculate exit fee
-        uint256 exitFee = (usdcReceived * feeConfig.exitFeeBps) / 10000;
+        uint256 exitFee = (usdcReceived * feeConfig.exitFeeBps) / BASIS_POINTS;
         uint256 totalFees = performanceFee + exitFee;
         uint256 netAmount = usdcReceived - totalFees;
 
@@ -218,7 +248,7 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
         }
 
         // Transfer USDC to user
-        IERC20(baseToken).transfer(msg.sender, netAmount);
+        IERC20(baseToken).safeTransfer(msg.sender, netAmount);
 
         emit Withdrawal(msg.sender, sharesIn, netAmount);
     }
@@ -235,20 +265,120 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
     /**
      * @dev Calculate current NAV in base token terms
      */
-    function _calculateNAV() internal view returns (uint256) {
+    function calculateNAV() public view override returns (uint256) {
         uint256 totalValue = 0;
         
         for (uint256 i = 0; i < basketInfo.assets.length; i++) {
             address asset = basketInfo.assets[i];
-            uint256 balance = IERC20(asset).balanceOf(vault);
-            uint256 price = oracle.getPrice(asset);
-            totalValue += (balance * price) / 1e18;
+            uint256 balance = vault.getTokenBalance(asset);
+            
+            if (balance > 0) {
+                uint256 price = oracle.getPrice(asset);
+                uint8 assetDecimals = IERC20Extended(asset).decimals();
+                uint8 baseDecimals = IERC20Extended(baseToken).decimals();
+                
+                // Normalize to base token decimals
+                uint256 normalizedBalance = balance;
+                if (assetDecimals > baseDecimals) {
+                    normalizedBalance = balance / (10 ** (assetDecimals - baseDecimals));
+                } else if (baseDecimals > assetDecimals) {
+                    normalizedBalance = balance * (10 ** (baseDecimals - assetDecimals));
+                }
+                
+                totalValue += (normalizedBalance * price) / 1e18;
+            }
         }
         
-        // Add any remaining base token
-        totalValue += IERC20(baseToken).balanceOf(vault);
+        // Add any remaining base token in vault (not controller)
+        totalValue += vault.getTokenBalance(baseToken);
         
         return totalValue;
+    }
+
+    /**
+     * @dev Execute buy orders for basket assets
+     */
+    function _executeBuyOrders(uint256 usdcAmount) internal {
+        // Approve router to spend USDC
+        IERC20(baseToken).forceApprove(address(orderRouter), usdcAmount);
+        
+        for (uint256 i = 0; i < basketInfo.assets.length; i++) {
+            address asset = basketInfo.assets[i];
+            uint256 weight = basketInfo.weights[i];
+            uint256 assetAmount = (usdcAmount * weight) / BASIS_POINTS;
+            
+            if (assetAmount > 0) {
+                // Calculate minimum amount out with slippage protection
+                uint256 expectedOut = orderRouter.quote(baseToken, asset, assetAmount);
+                uint256 minAmountOut = (expectedOut * (BASIS_POINTS - MAX_SLIPPAGE_BPS)) / BASIS_POINTS;
+                
+                try orderRouter.buy(
+                    baseToken,
+                    asset,
+                    assetAmount,
+                    minAmountOut,
+                    address(vault)
+                ) returns (uint256 /* amountOut */) {
+                    // Success - tokens sent directly to vault
+                } catch {
+                    // If trade fails, keep USDC for manual intervention
+                    // In production, implement more sophisticated error handling
+                    revert("Buy order failed");
+                }
+            }
+        }
+    }
+
+    /**
+     * @dev Execute sell orders for basket assets
+     */
+    function _executeSellOrders(uint256 sharePercentageBps) internal returns (uint256 totalUsdcReceived) {
+        totalUsdcReceived = 0;
+        
+        for (uint256 i = 0; i < basketInfo.assets.length; i++) {
+            address asset = basketInfo.assets[i];
+            uint256 assetBalance = vault.getTokenBalance(asset);
+            
+            if (assetBalance > 0) {
+                uint256 amountToSell = (assetBalance * sharePercentageBps) / BASIS_POINTS;
+                
+                if (amountToSell > 0) {
+                    // Withdraw from vault to this contract for trading
+                    vault.pullToken(asset, amountToSell, address(this));
+                    
+                    // Approve router to spend asset
+                    IERC20(asset).forceApprove(address(orderRouter), amountToSell);
+                    
+                    // Calculate minimum USDC out with slippage protection
+                    uint256 expectedOut = orderRouter.quote(asset, baseToken, amountToSell);
+                    uint256 minAmountOut = (expectedOut * (BASIS_POINTS - MAX_SLIPPAGE_BPS)) / BASIS_POINTS;
+                    
+                    try orderRouter.sell(
+                        asset,
+                        baseToken,
+                        amountToSell,
+                        minAmountOut,
+                        address(this)
+                    ) returns (uint256 usdcReceived) {
+                        totalUsdcReceived += usdcReceived;
+                    } catch {
+                        // If trade fails, return asset to vault
+                        IERC20(asset).safeTransfer(address(vault), amountToSell);
+                        revert("Sell order failed");
+                    }
+                }
+            }
+        }
+        
+        // Add any USDC already in vault
+        uint256 vaultUsdcBalance = vault.getTokenBalance(baseToken);
+        if (vaultUsdcBalance > 0) {
+            uint256 usdcToWithdraw = (vaultUsdcBalance * sharePercentageBps) / BASIS_POINTS;
+            if (usdcToWithdraw > 0) {
+                vault.pullToken(baseToken, usdcToWithdraw, address(this));
+                totalUsdcReceived += usdcToWithdraw;
+            }
+        }
     }
 
     /**
@@ -258,11 +388,11 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
         if (block.timestamp <= lastFeeUpdate) return;
         
         uint256 timeElapsed = block.timestamp - lastFeeUpdate;
-        uint256 annualFee = feeConfig.streamingFeeBps;
-        uint256 feeAmount = (annualFee * timeElapsed) / (365 days * 10000);
+        uint256 annualFeeBps = feeConfig.streamingFeeBps;
+        uint256 feeAmount = (annualFeeBps * timeElapsed) / (365 days * BASIS_POINTS);
         
         if (feeAmount > 0 && basketToken.totalSupply() > 0) {
-            // Mint new tokens to fee recipient (simplified)
+            // Update accumulated fee per share
             accFeePerShare += (feeAmount * 1e18) / basketToken.totalSupply();
         }
         
@@ -279,48 +409,127 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
     }
 
     /**
-     * @dev Execute buy orders for basket assets (placeholder)
-     */
-    function _executeBuyOrders(uint256 usdcAmount) internal {
-        // Implementation would interact with OrderRouter
-        // This is a simplified placeholder
-    }
-
-    /**
-     * @dev Execute sell orders for basket assets (placeholder)
-     */
-    function _executeSellOrders(uint256 sharePercentage) internal returns (uint256) {
-        // Implementation would interact with OrderRouter
-        // This is a simplified placeholder
-        return 0;
-    }
-
-    /**
      * @dev Callback from basket token on transfers
      */
-    function onTokenTransfer(address from, address to, uint256 amount) external override {
+    function onTokenTransfer(address from, address to, uint256 /* amount */) external override {
         require(msg.sender == address(basketToken), "Only basket token");
         
         // Update fee debt for both accounts
         if (from != address(0)) {
-            feeDebt[from] = (basketToken.balanceOf(from) * accFeePerShare) / 1e18;
+            uint256 balance = basketToken.balanceOf(from);
+            feeDebt[from] = (balance * accFeePerShare) / 1e18;
         }
         if (to != address(0)) {
-            feeDebt[to] = (basketToken.balanceOf(to) * accFeePerShare) / 1e18;
+            uint256 balance = basketToken.balanceOf(to);
+            feeDebt[to] = (balance * accFeePerShare) / 1e18;
         }
+    }
+
+    /**
+     * @dev Claim accumulated fees
+     */
+    function claimFees() external {
+        uint256 balance = basketToken.balanceOf(msg.sender);
+        uint256 accruedFees = (balance * accFeePerShare) / 1e18;
+        uint256 debt = feeDebt[msg.sender];
+        
+        require(accruedFees > debt, "No fees to claim");
+        
+        uint256 claimableAmount = accruedFees - debt;
+        feeDebt[msg.sender] = accruedFees;
+        
+        // Transfer USDC fees from contract balance
+        require(IERC20(baseToken).balanceOf(address(this)) >= claimableAmount, "Insufficient fee balance");
+        IERC20(baseToken).safeTransfer(msg.sender, claimableAmount);
+        
+        emit FeesCollected(msg.sender, claimableAmount);
+    }
+
+    /**
+     * @dev Get pending fees for an address
+     */
+    function getPendingFees(address user) external view returns (uint256) {
+        uint256 balance = basketToken.balanceOf(user);
+        uint256 accruedFees = (balance * accFeePerShare) / 1e18;
+        uint256 debt = feeDebt[user];
+        
+        return accruedFees > debt ? accruedFees - debt : 0;
     }
 
     /**
      * @dev Get basket composition
      */
-    function getBasketComposition() external view returns (address[] memory, uint256[] memory) {
+    function getBasketComposition() external view override returns (address[] memory, uint256[] memory) {
         return (basketInfo.assets, basketInfo.weights);
     }
 
     /**
      * @dev Check if address is valid for operations
      */
-    function isValidUser(address user) external view returns (bool) {
+    function isValidUser(address user) external view override returns (bool) {
         return !basketToken.blacklisted(user) && !emergencyPaused;
+    }
+
+    /**
+     * @dev Get basket statistics
+     */
+    function getBasketStats() external view returns (
+        uint256 totalSupply,
+        uint256 nav,
+        uint256 totalAssets,
+        uint256 lastRebalanceTime,
+        bool isActive
+    ) {
+        totalSupply = basketToken.totalSupply();
+        nav = calculateNAV();
+        totalAssets = basketInfo.assets.length;
+        lastRebalanceTime = basketInfo.lastRebalance;
+        isActive = basketInfo.isActive && !emergencyPaused;
+    }
+
+    /**
+     * @dev Rebalance basket weights (simplified - manual trigger only in V1)
+     * @notice WARNING: This only updates target weights, does NOT execute trades
+     * @notice Basket will be rebalanced gradually through natural deposit/withdrawal flow
+     * @notice For immediate rebalancing, implement _executeRebalanceTrades() function
+     */
+    function announceRebalance(
+        uint256[] calldata newWeights
+    ) external onlySecurityCouncil {
+        require(newWeights.length == basketInfo.assets.length, "Length mismatch");
+        
+        // Validate new weights sum to 10000
+        uint256 totalWeight = 0;
+        for (uint256 i = 0; i < newWeights.length; i++) {
+            require(newWeights[i] > 0, "Weight must be positive");
+            totalWeight += newWeights[i];
+        }
+        require(totalWeight == BASIS_POINTS, "Weights must sum to 10000");
+        
+        // Update target weights - actual rebalancing happens through deposits/withdrawals
+        // TODO: Implement _executeRebalanceTrades() for immediate rebalancing
+        basketInfo.weights = newWeights;
+        basketInfo.lastRebalance = block.timestamp;
+        
+        emit Rebalance(block.timestamp, basketInfo.assets, newWeights);
+    }
+
+    /**
+     * @dev Update security council
+     */
+    function updateSecurityCouncil(address newCouncil) external onlySecurityCouncil {
+        require(newCouncil != address(0), "Invalid address");
+        securityCouncil = newCouncil;
+    }
+
+    /**
+     * @dev Update deposit limits
+     */
+    function updateLimits(uint256 newMaxDeposit, uint256 newMaxSupply) external onlySecurityCouncil {
+        require(newMaxDeposit > MIN_DEPOSIT, "Max deposit too low");
+        require(newMaxSupply > basketToken.totalSupply(), "Max supply too low");
+        
+        maxDepositAmount = newMaxDeposit;
+        maxTotalSupply = newMaxSupply;
     }
 }

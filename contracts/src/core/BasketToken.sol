@@ -1,5 +1,9 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "../interfaces/IBasketController.sol";
 
 /**
  * @title BasketToken with enhanced security
@@ -38,7 +42,7 @@ contract BasketToken is ERC20, Ownable {
         string memory name,
         string memory symbol,
         address _controller
-    ) ERC20(name, symbol) {
+    ) ERC20(name, symbol) Ownable(msg.sender) {
         controller = _controller;
         transfersEnabled = true;
         _transferOwnership(_controller);
@@ -59,10 +63,6 @@ contract BasketToken is ERC20, Ownable {
         returns (bool) 
     {
         lastTransferTime[msg.sender] = block.timestamp;
-        
-        // Call back to controller for fee accounting
-        _beforeTokenTransfer(msg.sender, to, amount);
-        
         return super.transfer(to, amount);
     }
 
@@ -73,19 +73,19 @@ contract BasketToken is ERC20, Ownable {
         returns (bool) 
     {
         lastTransferTime[from] = block.timestamp;
-        
-        // Call back to controller for fee accounting
-        _beforeTokenTransfer(from, to, amount);
-        
         return super.transferFrom(from, to, amount);
     }
 
-    function _beforeTokenTransfer(address from, address to, uint256 amount) internal override {
+    function _update(address from, address to, uint256 amount) internal override {
+        // Call parent _update first
+        super._update(from, to, amount);
+        
+        // Only notify controller for regular transfers, not mint/burn operations
+        // from == address(0) = minting, to == address(0) = burning
         if (from != address(0) && to != address(0)) {
             // Notify controller about transfer for fee accounting
             IBasketController(controller).onTokenTransfer(from, to, amount);
         }
-        super._beforeTokenTransfer(from, to, amount);
     }
 
     function enableTransfers() external onlyOwner {
