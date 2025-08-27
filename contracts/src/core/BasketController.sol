@@ -404,6 +404,8 @@ contract BasketController is EnhancedReentrancyGuard, IBasketController {
      */
     function _distributeFee(uint256 feeAmount) internal {
         if (basketToken.totalSupply() > 0) {
+            // Ensure contract has the USDC to distribute
+            require(IERC20(baseToken).balanceOf(address(this)) >= feeAmount, "Insufficient fee balance");
             accFeePerShare += (feeAmount * 1e18) / basketToken.totalSupply();
         }
     }
