@@ -142,7 +142,7 @@ contract BasketVaultERC7540 is
     /// @dev Override withdraw to add pause check
     function withdraw(uint256 assets, address receiver, address owner)
         public
-        override(ERC4626, IERC4626)
+        override(ERC4626, IBasketVaultERC7540)
         notPaused
         returns (uint256 shares)
     {
@@ -152,7 +152,7 @@ contract BasketVaultERC7540 is
     /// @dev Override redeem to add pause check
     function redeem(uint256 shares, address receiver, address owner)
         public
-        override(ERC4626, IERC4626)
+        override(ERC4626, IBasketVaultERC7540)
         notPaused
         returns (uint256 assets)
     {
