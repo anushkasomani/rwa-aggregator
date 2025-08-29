@@ -3,12 +3,14 @@ import Link from "next/link";
 import React, { useState } from "react";
 import { useWallet } from "@/components/wallet/WalletProvider";
 import SignInModal from "@/components/auth/SignInModal";
+import { usePathname } from "next/navigation";
 
 export default function Navbar() {
   const [open, setOpen] = useState(false);
   const [signin, setSignin] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const { address, short, disconnect, setModalOpen } = useWallet();
+  const pathname = usePathname();
   return (
     <header className="sticky top-0 z-40">
       <div className="glass-panel mx-auto mt-3 w-[min(1200px,95%)] rounded-2xl px-4 py-3">
@@ -19,12 +21,11 @@ export default function Navbar() {
           </Link>
           <nav className="hidden md:flex mx-auto gap-6 text-sm text-subtle">
             {[
-              { href: "#how", label: "How it works" },
-              { href: "#templates", label: "Templates" },
-              { href: "#docs", label: "Docs" },
-              { href: "/community", label: "Community" },
+              { href: "/build", label: "Build" },
+              { href: "/explore", label: "Explore" },
+              { href: "/portfolio", label: "My Portfolio" },
             ].map((l) => (
-              <Link key={l.href} href={l.href} className="neon-underline hover:text-[var(--foreground)]">
+              <Link key={l.href} href={l.href} className={`neon-underline hover:text-[var(--foreground)] ${pathname===l.href? 'text-[var(--foreground)]' : ''}`}>
                 {l.label}
               </Link>
             ))}
@@ -54,10 +55,9 @@ export default function Navbar() {
         </div>
         {open && (
           <div className="mt-3 grid gap-2 md:hidden">
-            <Link href="#how" onClick={()=>setOpen(false)} className="neon-underline py-2">How it works</Link>
-            <Link href="#templates" onClick={()=>setOpen(false)} className="neon-underline py-2">Templates</Link>
-            <Link href="#docs" onClick={()=>setOpen(false)} className="neon-underline py-2">Docs</Link>
-            <Link href="/community" onClick={()=>setOpen(false)} className="neon-underline py-2">Community</Link>
+            <Link href="/build" onClick={()=>setOpen(false)} className="neon-underline py-2">Build</Link>
+            <Link href="/explore" onClick={()=>setOpen(false)} className="neon-underline py-2">Explore</Link>
+            <Link href="/portfolio" onClick={()=>setOpen(false)} className="neon-underline py-2">My Portfolio</Link>
             <div className="flex gap-2 pt-2">
               <Link href="#app" className="btn-primary flex-1 text-center">Launch App</Link>
               {!address ? (

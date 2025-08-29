@@ -5,6 +5,7 @@ import { spaceGrotesk, inter } from "./fonts";
 import { ToastProvider } from "@/components/toast/ToastProvider";
 import { WalletProvider } from "@/components/wallet/WalletProvider";
 import WalletModal from "@/components/wallet/WalletModal";
+import { AppStateProvider } from "@/components/state/AppStateProvider";
 
 export const metadata: Metadata = {
   title: "PromptFi — Talk-to-Portfolio Vaults",
@@ -27,8 +28,10 @@ export default function RootLayout({
       <body className={`${spaceGrotesk.variable} ${inter.variable} antialiased`}>
         <ToastProvider>
           <WalletProvider>
-            <div className="min-h-dvh">{children}</div>
-            <WalletModal />
+            <AppStateProvider>
+              <div className="min-h-dvh">{children}</div>
+              <WalletModal />
+            </AppStateProvider>
           </WalletProvider>
         </ToastProvider>
       </body>
