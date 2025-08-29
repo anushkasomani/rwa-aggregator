@@ -7,8 +7,8 @@ function toDinariEnv(e?: string): "sandbox" | "production" | undefined {
   }
   
   export const dinari = new Dinari({
-    apiKeyID: '198a3aa-12b7-715a-b9a9-94bc4bfd2476',
-    apiSecretKey: 'aNMQMEbe-NYrWNGrcm82I6Oa5mdLnw3SitM9cH2SAAs',
-    environment: toDinariEnv(process.env.DINARI_ENV),
+    apiKeyID: '0198c6cb-9895-7360-995b-a43fa0594462',
+    apiSecretKey: 'SwX8W6yrxXSd-6YnWiDKQcvt_fnCAUq7ujhz9bSyrRo',
+    environment: "sandbox",
   });
   
