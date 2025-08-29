@@ -1,103 +1,52 @@
-import Image from "next/image";
+"use client";
+import React, { useState } from "react";
+import Navbar from "@/components/Navbar";
+import Hero from "@/components/Hero";
+import HowItWorks from "@/components/HowItWorks";
+import IntegrationsRibbon from "@/components/IntegrationsRibbon";
+import TemplateGallery from "@/components/TemplateGallery";
+import StrategyBuilder from "@/components/StrategyBuilder";
+import BacktestResults from "@/components/BacktestResults";
+import DocsSpotlight from "@/components/DocsSpotlight";
+import VaultHeader from "@/components/VaultHeader";
+import VaultCharts from "@/components/VaultCharts";
+import RequestsReceipts from "@/components/RequestsReceipts";
+import AgentActivity from "@/components/AgentActivity";
+import YieldScanner from "@/components/YieldScanner";
+import MinimalHero from "@/components/MinimalHero";
+import Footer from "@/components/Footer";
+import { useToast } from "@/components/toast/ToastProvider";
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [prompt, setPrompt] = useState("equal-weight BTC/ETH, buy only if price > 20D MA, volume strong, sentiment positive");
+  const { push } = useToast();
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  return (
+    <div>
+      <Navbar />
+      <main className="mx-auto w-[min(1200px,95%)] pb-24">
+        <Hero
+          value={prompt}
+          onChange={setPrompt}
+          onStart={() => push({ title: "Prompt captured", description: "You can preview plan or run backtest below.", tone: "success" })}
+          onTemplates={() => document.getElementById("templates")?.scrollIntoView({ behavior: "smooth" })}
+        />
+        <div className="mt-6">
+          <HowItWorks />
+          <IntegrationsRibbon />
+          <TemplateGallery onUse={(p)=> setPrompt(p)} />
+          <StrategyBuilder />
+          <BacktestResults />
+          <DocsSpotlight />
+          <VaultHeader />
+          <VaultCharts />
+          <RequestsReceipts />
+          <AgentActivity />
+          <YieldScanner />
+          <MinimalHero />
         </div>
       </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      <Footer />
     </div>
   );
 }
