@@ -5,10 +5,12 @@ import { createRoot } from "react-dom/client";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { GlobalStateProvider } from "@/contexts/GlobalStateContext";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import PlaceholderPage from "./pages/PlaceholderPage";
+import { AppShell } from "./components/AppShell";
 import { DAppLayout } from "./components/dapp/DAppLayout";
 import Portfolio from "./pages/dapp/Portfolio";
 import Market from "./pages/dapp/Market";
@@ -17,23 +19,38 @@ import Perps from "./pages/dapp/Perps";
 import Yield from "./pages/dapp/Yield";
 import Activity from "./pages/dapp/Activity";
 import Settings from "./pages/dapp/Settings";
+import Swap from "./pages/dapp/Swap";
+import Mint from "./pages/dapp/Mint";
+import Baskets from "./pages/dapp/Baskets";
 import DAppPage from "./pages/dapp/DAppPage";
+import Invest from "./pages/Invest";
+import Build from "./pages/Build";
+import MyPortfolio from "./pages/MyPortfolio";
+import Learn from "./pages/Learn";
+import VaultDetail from "./pages/VaultDetail";
 
 const queryClient = new QueryClient();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-
-          {/* dApp Routes */}
-          <Route path="/app" element={<DAppLayout />}>
-            <Route index element={<Portfolio />} />
-            <Route path="portfolio" element={<Portfolio />} />
+    <GlobalStateProvider>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <Routes>
+          {/* Main App Routes with AppShell */}
+          <Route path="/" element={<AppShell />}>
+            <Route index element={<Invest />} />
+            <Route path="invest" element={<Invest />} />
+            <Route path="build" element={<Build />} />
+            <Route path="portfolio" element={<MyPortfolio />} />
+            <Route path="learn" element={<Learn />} />
+            <Route path="vault/:id" element={<VaultDetail />} />
+            {/* Additional dApp pages */}
+            <Route path="mint" element={<Mint />} />
+            <Route path="swap" element={<Swap />} />
+            <Route path="baskets" element={<Baskets />} />
             <Route path="market" element={<Market />} />
             <Route path="lending" element={<Lending />} />
             <Route path="perps" element={<Perps />} />
@@ -41,6 +58,24 @@ const App = () => (
             <Route path="activity" element={<Activity />} />
             <Route path="settings" element={<Settings />} />
           </Route>
+
+          {/* Legacy dApp Routes */}
+          <Route path="/app" element={<DAppLayout />}>
+            <Route index element={<Portfolio />} />
+            <Route path="portfolio" element={<Portfolio />} />
+            <Route path="market" element={<Market />} />
+            <Route path="mint" element={<Mint />} />
+            <Route path="swap" element={<Swap />} />
+            <Route path="baskets" element={<Baskets />} />
+            <Route path="lending" element={<Lending />} />
+            <Route path="perps" element={<Perps />} />
+            <Route path="yield" element={<Yield />} />
+            <Route path="activity" element={<Activity />} />
+            <Route path="settings" element={<Settings />} />
+          </Route>
+
+          {/* Legacy Index Page */}
+          <Route path="/home" element={<Index />} />
 
           {/* Marketing Site Routes */}
           <Route path="/docs" element={<PlaceholderPage />} />
@@ -65,8 +100,9 @@ const App = () => (
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
+        </BrowserRouter>
+      </TooltipProvider>
+    </GlobalStateProvider>
   </QueryClientProvider>
 );
 

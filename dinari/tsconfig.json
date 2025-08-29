@@ -1,32 +1,13 @@
 {
   "compilerOptions": {
-    /* File Layout */
-    "rootDir": "./src",
-    "outDir": "./dist",
-
-    /* Module + Target */
-    "module": "esnext",                  // Keep ESM syntax
-    "moduleResolution": "node",          // Resolve like Node's ESM
-    "target": "es2020",                   // Modern JS features
-
-    /* Node types */
-    "lib": ["es2020"],
-    "types": ["node"],
-
-    /* Source maps + declarations */
-    "sourceMap": true,
-    "declaration": true,
-    "declarationMap": true,
-
-    /* Strict mode */
-    "strict": true,
-    "verbatimModuleSyntax": true,         // Keep imports exactly as written
-    "isolatedModules": true,
+    "target": "ES2020",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "dist",
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    /* Misc */
+    "strict": true,
     "skipLibCheck": true
   },
-  "include": ["src"],
-  
+  "include": ["src"]
 }
