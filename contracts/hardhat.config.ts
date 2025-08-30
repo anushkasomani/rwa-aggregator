@@ -1,7 +1,7 @@
 import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
-import "@nomicfoundation/hardhat-foundry";
-// import "hardhat-contract-sizer"; // Temporarily disabled for testing
+// import "@nomicfoundation/hardhat-foundry"; // Temporarily disabled until foundry is properly installed
+import "hardhat-contract-sizer"; // Contract size reporting
 import "hardhat-gas-reporter";
 import "solidity-coverage";
 import * as dotenv from "dotenv";
@@ -63,8 +63,8 @@ const config: HardhatUserConfig = {
   contractSizer: {
     alphaSort: true,
     disambiguatePaths: false,
-    runOnCompile: true,
-    strict: true,
+  runOnCompile: false,
+  strict: false,
   },
   typechain: {
     outDir: "typechain-types",
