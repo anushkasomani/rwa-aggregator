@@ -6,3 +6,6 @@
 
 # Ignore node_modules in frontend folder
 /frontend/node_modules/
+
+# Ignore any nested node_modules (monorepo safety)
+**/node_modules/
