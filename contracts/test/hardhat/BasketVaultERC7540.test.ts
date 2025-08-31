@@ -240,9 +240,9 @@ describe("BasketVaultERC7540", function () {
       });
 
       it("Should reject invalid owner", async function () {
-        const { vault, user1, user2 } = await loadFixture(deployVaultFixture);
+        const { vault, user1 } = await loadFixture(deployVaultFixture);
 
-        await expect(vault.connect(user1).requestDeposit(DEPOSIT_AMOUNT, user1.address, user2.address))
+        await expect(vault.connect(user1).requestDeposit(DEPOSIT_AMOUNT, user1.address, ethers.ZeroAddress))
           .to.be.revertedWithCustomError(vault, "InvalidOwner");
       });
     });

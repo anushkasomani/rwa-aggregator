@@ -65,12 +65,12 @@ contract BasketVaultERC7540 is ERC4626, IBasketVaultERC7540, Ownable, Reentrancy
     // ================================
 
     modifier notPaused() {
-        require(!emergencyPaused, "Vault: emergency paused");
+        if (emergencyPaused) revert VaultEmergencyPaused();
         _;
     }
 
     modifier onlyControllerOrOperator(address controller) {
-        require(controller == msg.sender || isOperator(controller, msg.sender), "Vault: not controller or operator");
+        if (controller != msg.sender && !isOperator(controller, msg.sender)) revert NotControllerOrOperator();
         _;
     }
 
