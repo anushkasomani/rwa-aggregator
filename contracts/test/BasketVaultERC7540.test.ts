@@ -82,7 +82,7 @@ describe("BasketVaultERC7540 with MultiVaultTracker", function () {
       expect(position.shares).to.equal(DEPOSIT_AMOUNT);
     });
 
-    it("should allow withdrawals and track them", async function () {
+    it("should allow withdrawals and track them correctly", async function () {
       // User1 deposits first
   await (vault.connect(user1) as any)["deposit(uint256,address)"](DEPOSIT_AMOUNT, user1.address);
       
