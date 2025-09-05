@@ -3,15 +3,19 @@ pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "./BasketController.sol";
-import "./BasketVault.sol";
+import "./MultiAssetVault.sol";
 import "../oracles/OracleAggregator.sol";
 
 /**
- * @title BasketFactory for creating new baskets
- * @dev Factory pattern with security controls and validation
+ * @title BasketFactory
+ * @dev Factory for creating multi-asset basket vaults with bot management
  */
 contract BasketFactory is Ownable, ReentrancyGuard {
+    
+    // ================================
+    // STRUCTS
+    // ================================
+    
     struct BasketConfig {
         address[] assets;
         uint256[] weights;
@@ -22,8 +26,11 @@ contract BasketFactory is Ownable, ReentrancyGuard {
         uint256 createdAt;
     }
 
+    // ================================
+    // STATE VARIABLES
+    // ================================
+    
     address public immutable oracleAggregator;
-    address public immutable securityCouncil;
     address public immutable orderRouter;
     
     address[] public allBaskets;
@@ -33,43 +40,71 @@ contract BasketFactory is Ownable, ReentrancyGuard {
     
     uint256 public constant MIN_ASSETS = 3;
     uint256 public constant MAX_ASSETS = 10;
-    uint256 public constant TOTAL_WEIGHT = 10000; // 100% in basis points
-    uint256 public basketCreationFee = 0; // Can be set to prevent spam
-
+    uint256 public constant TOTAL_WEIGHT = 10000;
+    
+    uint256 public basketCreationFee;
     bool public basketCreationPaused;
 
+    // ================================
+    // EVENTS
+    // ================================
+    
     event BasketCreated(
         address indexed basket,
+        address indexed vault,
         address indexed creator,
         address[] assets,
         uint256[] weights,
         bytes32 configHash
     );
+    
     event BasketCreationPaused();
     event BasketCreationUnpaused();
     event CreationFeeUpdated(uint256 newFee);
 
+    // ================================
+    // ERRORS
+    // ================================
+    
+    error CreationPaused();
+    error InsufficientFee();
+    error InvalidAssetCount();
+    error InvalidInput();
+    error InvalidWeights();
+    error DuplicateAsset();
+    error AssetNotSupported();
+    error BasketExists();
+
+    // ================================
+    // MODIFIERS
+    // ================================
+    
     modifier basketCreationNotPaused() {
-        require(!basketCreationPaused, "Basket creation paused");
+        if (basketCreationPaused) revert CreationPaused();
         _;
     }
 
+    // ================================
+    // CONSTRUCTOR
+    // ================================
+    
     constructor(
         address _oracleAggregator,
-        address _securityCouncil,
         address _orderRouter
     ) Ownable(msg.sender) {
-        require(_oracleAggregator != address(0), "Invalid oracle");
-        require(_securityCouncil != address(0), "Invalid security council");
-        require(_orderRouter != address(0), "Invalid order router");
+        if (_oracleAggregator == address(0)) revert InvalidInput();
+        if (_orderRouter == address(0)) revert InvalidInput();
         
         oracleAggregator = _oracleAggregator;
-        securityCouncil = _securityCouncil;
         orderRouter = _orderRouter;
     }
 
+    // ================================
+    // MAIN FUNCTIONS
+    // ================================
+    
     /**
-     * @dev Create a new basket
+     * @dev Create a new multi-asset basket vault
      */
     function createBasket(
         address[] memory assets,
@@ -77,173 +112,164 @@ contract BasketFactory is Ownable, ReentrancyGuard {
         address baseToken,
         string memory name,
         string memory symbol
-    ) external payable basketCreationNotPaused nonReentrant returns (address) {
-        require(msg.value >= basketCreationFee, "Insufficient creation fee");
-        require(assets.length >= MIN_ASSETS, "Too few assets");
-        require(assets.length <= MAX_ASSETS, "Too many assets");
-        require(assets.length == weights.length, "Length mismatch");
-        require(bytes(name).length > 0, "Name required");
-        require(bytes(symbol).length > 0, "Symbol required");
-
-        // Validate weights sum to 100%
-        uint256 totalWeight = 0;
-        for (uint256 i = 0; i < weights.length; i++) {
-            require(weights[i] > 0, "Weight must be positive");
-            totalWeight += weights[i];
-        }
-        require(totalWeight == TOTAL_WEIGHT, "Weights must sum to 10000");
-
-        // Validate no duplicate assets and basic checks
-        require(baseToken != address(0), "Invalid base token");
-        for (uint256 i = 0; i < assets.length; i++) {
-            require(assets[i] != address(0), "Invalid asset address");
-            require(assets[i] != baseToken, "Asset cannot be base token");
-            
-            // Check for duplicates
-            for (uint256 j = i + 1; j < assets.length; j++) {
-                require(assets[i] != assets[j], "Duplicate asset");
-            }
-        }
-
-        // Validate assets have oracle prices (prevent baskets with unpriceable assets)
-        for (uint256 i = 0; i < assets.length; i++) {
-            try OracleAggregator(oracleAggregator).getPrice(assets[i]) returns (uint256 price) {
-                require(price > 0, "Asset has no valid price");
-            } catch {
-                revert("Asset not supported by oracle");
-            }
-        }
-
-        // Calculate config hash to prevent duplicates
-        bytes32 configHash = keccak256(
-            abi.encodePacked(
-                _sortArrays(assets, weights),
-                baseToken
-            )
-        );
-        require(basketsByHash[configHash] == address(0), "Basket already exists");
-
-        // Deploy vault
-        BasketVault vault = new BasketVault();
+    ) external payable basketCreationNotPaused nonReentrant returns (address basketVault) {
         
-        // Authorize all assets in vault
-        for (uint256 i = 0; i < assets.length; i++) {
-            vault.authorizeToken(assets[i]);
-        }
-        vault.authorizeToken(baseToken); // Also authorize base token
+        // Basic validations
+        if (msg.value < basketCreationFee) revert InsufficientFee();
+        if (assets.length < MIN_ASSETS || assets.length > MAX_ASSETS) revert InvalidAssetCount();
+        if (assets.length != weights.length) revert InvalidInput();
+        if (bytes(name).length == 0 || bytes(symbol).length == 0) revert InvalidInput();
+        if (baseToken == address(0)) revert InvalidInput();
 
-        // Deploy controller
-        BasketController controller = new BasketController(
-            assets,
-            weights,
+        // Validate weights
+        // _validateWeights(weights);
+        
+        // Validate assets
+        _validateAssets(assets, baseToken);
+        
+        // Check for duplicates
+        bytes32 configHash = _calculateConfigHash(assets, weights, baseToken);
+        if (basketsByHash[configHash] != address(0)) revert BasketExists();
+
+        // Deploy MultiAssetVault with required dependencies
+        basketVault = address(new MultiAssetVault(
             baseToken,
-            address(vault),
-            oracleAggregator,
-            securityCouncil,
+            string.concat(name, " Vault"),
+            string.concat(symbol, "V"),
             orderRouter,
-            name,
-            symbol
-        );
-
-        // Set controller as vault owner
-        vault.transferOwnership(address(controller));
+            oracleAggregator
+        ));
+        
+        // Configure vault with basket composition
+        MultiAssetVault vault = MultiAssetVault(basketVault);
+        
+        // Initialize basket configuration
+        vault.initializeBasket(assets, weights);
+        
+        // Transfer vault ownership to factory owner (enables admin/bot operations)
+        vault.transferOwnership(owner());
 
         // Register basket
-        basketsByHash[configHash] = address(controller);
-        isValidBasket[address(controller)] = true;
-        allBaskets.push(address(controller));
-        basketsByCreator[msg.sender].push(address(controller));
+        basketsByHash[configHash] = basketVault;
+        isValidBasket[basketVault] = true;
+        allBaskets.push(basketVault);
+        basketsByCreator[msg.sender].push(basketVault);
 
         emit BasketCreated(
-            address(controller),
+            basketVault,
+            basketVault,
             msg.sender,
             assets,
             weights,
             configHash
         );
-
-        return address(controller);
     }
 
-    /**
-     * @dev Sort arrays to ensure consistent hashing
-     */
+    // ================================
+    // INTERNAL FUNCTIONS
+    // ================================
+
+    // Bot handles the rebalancing, so weights can be zero
+    // Keeping the function for future reference
+    // function _validateWeights(uint256[] memory weights) internal pure {
+    //     uint256 totalWeight = 0;
+    //     for (uint256 i = 0; i < weights.length; i++) {
+    //         // Weights can be zero to allow optional assets
+    //         // if (weights[i] == 0) revert InvalidWeights();
+    //         totalWeight += weights[i];
+    //     }
+    //     if (totalWeight != TOTAL_WEIGHT) revert InvalidWeights();
+    // }
+    
+    function _validateAssets(address[] memory assets, address baseToken) internal view {
+        for (uint256 i = 0; i < assets.length; i++) {
+            if (assets[i] == address(0)) revert InvalidInput();
+            if (assets[i] == baseToken) revert InvalidInput();
+            
+            // Check for duplicates
+            for (uint256 j = i + 1; j < assets.length; j++) {
+                if (assets[i] == assets[j]) revert DuplicateAsset();
+            }
+            
+            // Validate oracle support
+            try OracleAggregator(oracleAggregator).getPrice(assets[i]) returns (uint256 price) {
+                if (price == 0) revert AssetNotSupported();
+            } catch {
+                revert AssetNotSupported();
+            }
+        }
+    }
+    
+    function _calculateConfigHash(
+        address[] memory assets,
+        uint256[] memory weights,
+        address baseToken
+    ) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(
+            _sortArrays(assets, weights),
+            baseToken
+        ));
+    }
+    
     function _sortArrays(
         address[] memory assets,
         uint256[] memory weights
     ) internal pure returns (bytes memory) {
-        // Simple bubble sort for small arrays
+        // Bubble sort for small arrays
         for (uint256 i = 0; i < assets.length - 1; i++) {
             for (uint256 j = 0; j < assets.length - i - 1; j++) {
                 if (assets[j] > assets[j + 1]) {
                     // Swap assets
-                    address tempAsset = assets[j];
-                    assets[j] = assets[j + 1];
-                    assets[j + 1] = tempAsset;
-                    
-                    // Swap corresponding weights
-                    uint256 tempWeight = weights[j];
-                    weights[j] = weights[j + 1];
-                    weights[j + 1] = tempWeight;
+                    (assets[j], assets[j + 1]) = (assets[j + 1], assets[j]);
+                    // Swap weights
+                    (weights[j], weights[j + 1]) = (weights[j + 1], weights[j]);
                 }
             }
         }
-        
         return abi.encodePacked(assets, weights);
     }
 
-    /**
-     * @dev Get all baskets created by an address
-     */
+    // ================================
+    // VIEW FUNCTIONS
+    // ================================
+    
     function getBasketsByCreator(address creator) external view returns (address[] memory) {
         return basketsByCreator[creator];
     }
-
-    /**
-     * @dev Get all baskets
-     */
+    
     function getAllBaskets() external view returns (address[] memory) {
         return allBaskets;
     }
-
-    /**
-     * @dev Get basket count
-     */
+    
     function getBasketCount() external view returns (uint256) {
         return allBaskets.length;
     }
 
-    /**
-     * @dev Pause basket creation (emergency)
-     */
+    // ================================
+    // ADMIN FUNCTIONS
+    // ================================
+    
     function pauseBasketCreation() external onlyOwner {
         basketCreationPaused = true;
         emit BasketCreationPaused();
     }
-
-    /**
-     * @dev Unpause basket creation
-     */
+    
     function unpauseBasketCreation() external onlyOwner {
         basketCreationPaused = false;
         emit BasketCreationUnpaused();
     }
-
-    /**
-     * @dev Update creation fee
-     */
+    
     function setCreationFee(uint256 newFee) external onlyOwner {
         basketCreationFee = newFee;
         emit CreationFeeUpdated(newFee);
     }
-
-    /**
-     * @dev Withdraw accumulated fees
-     */
+    
+    // BasketCreationFee is collected in ETH
+    // Owner can withdraw accumulated fees
     function withdrawFees(address to) external onlyOwner {
-        require(to != address(0), "Invalid recipient");
+        if (to == address(0)) revert InvalidInput();
         uint256 balance = address(this).balance;
-        require(balance > 0, "No fees to withdraw");
+        if (balance == 0) return;
         
         (bool success, ) = to.call{value: balance}("");
         require(success, "Transfer failed");

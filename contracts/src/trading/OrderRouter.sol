@@ -1,187 +1,246 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "../interfaces/IOrderRouter.sol";
-import "./UniswapV3Adapter.sol";
 
-/**
- * @title OrderRouter with MEV protection
- * @dev Routes trades through various adapters with slippage protection
- */
-contract OrderRouter is IOrderRouter, Ownable, ReentrancyGuard {
-    using SafeERC20 for IERC20;
-
-    struct AdapterInfo {
-        address adapter;
-        bool isActive;
-        uint256 gasLimit;
+interface ILBRouter {
+    enum Version {
+        V1,
+        V2,
+        V2_1,
+        V2_2
     }
 
-    mapping(address => AdapterInfo) public adapters;
-    mapping(address => bool) public authorizedCallers;
+    struct Path {
+        uint256[] pairBinSteps;
+        Version[] versions;
+        IERC20[] tokenPath;
+    }
+
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        Path memory path,
+        address to,
+        uint256 deadline
+    ) external returns (uint256 amountOut);
+
+    function swapExactNATIVEForTokens(
+        uint256 amountOutMin,
+        Path memory path,
+        address to,
+        uint256 deadline
+    ) external payable returns (uint256 amountOut);
+
+    function swapExactTokensForNATIVE(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        Path memory path,
+        address to,
+        uint256 deadline
+    ) external returns (uint256 amountOut);
+}
+
+contract SimpleOrderRouter {
     
-    address public immutable baseToken; // USDC
-    uint256 public constant MAX_SLIPPAGE_BPS = 500; // 5% max slippage
-    uint256 public constant MIN_TRADE_AMOUNT = 100; // Minimum trade amount in base token decimals
-
-    event TradeExecuted(
-        address indexed tokenIn,
-        address indexed tokenOut,
-        uint256 amountIn,
-        uint256 amountOut,
-        address adapter
-    );
-    event AdapterAdded(address indexed token, address adapter);
-    event SlippageExceeded(address tokenIn, address tokenOut, uint256 expectedOut, uint256 actualOut);
-
-    modifier onlyAuthorized() {
-        require(authorizedCallers[msg.sender], "Not authorized");
-        _;
+    ILBRouter public immutable lbRouter;
+    IERC20 public immutable USDC;
+    IERC20 public immutable USDT;
+    IERC20 public immutable WAVAX;
+    
+    constructor(
+        address _lbRouter,
+        address _usdc,
+        address _usdt,
+        address _wavax
+    ) {
+        lbRouter = ILBRouter(_lbRouter);
+        USDC = IERC20(_usdc);
+        USDT = IERC20(_usdt);
+        WAVAX = IERC20(_wavax);
     }
-
-    constructor(address _baseToken) Ownable(msg.sender) {
-        baseToken = _baseToken;
-        authorizedCallers[msg.sender] = true;
-    }
-
-    /**
-     * @dev Buy tokens using base token (USDC)
-     */
-    function buy(
-        address tokenIn, // Should be baseToken (USDC)
-        address tokenOut,
-        uint256 amountIn,
-        uint256 minAmountOut,
-        address recipient
-    ) external override onlyAuthorized nonReentrant returns (uint256 amountOut) {
-        require(tokenIn == baseToken, "TokenIn must be base token");
-        require(amountIn >= MIN_TRADE_AMOUNT, "Amount too small");
-        require(adapters[tokenOut].isActive, "No adapter for token");
-
-        // Transfer tokens from caller
-        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
-
-        // Get quote and check slippage
-        uint256 expectedOut = quote(tokenIn, tokenOut, amountIn);
-        require(expectedOut >= minAmountOut, "Insufficient output amount");
-
-        // Execute trade through adapter
-        address adapter = adapters[tokenOut].adapter;
-        IERC20(tokenIn).forceApprove(adapter, amountIn);
+    
+    function swapUSDCtoUSDT(uint256 amountIn) external returns (uint256) {
+        USDC.transferFrom(msg.sender, address(this), amountIn);
+        USDC.approve(address(lbRouter), amountIn);
         
-        amountOut = IUniswapV3Adapter(adapter).swapExactInputSingle(
-            tokenIn,
-            tokenOut,
+        IERC20[] memory tokenPath = new IERC20[](2);
+        tokenPath[0] = USDC;
+        tokenPath[1] = USDT;
+        
+        uint256[] memory pairBinSteps = new uint256[](1);
+        pairBinSteps[0] = 1;
+        
+        ILBRouter.Version[] memory versions = new ILBRouter.Version[](1);
+        versions[0] = ILBRouter.Version.V2_2;
+        
+        ILBRouter.Path memory path;
+        path.pairBinSteps = pairBinSteps;
+        path.versions = versions;
+        path.tokenPath = tokenPath;
+        
+        uint256 amountOutMin = amountIn * 99 / 100;
+        
+        uint256 amountOut = lbRouter.swapExactTokensForTokens(
             amountIn,
-            minAmountOut,
-            recipient
+            amountOutMin,
+            path,
+            msg.sender,
+            block.timestamp + 300
         );
-
-        // Verify slippage
-        if (amountOut < expectedOut * (10000 - MAX_SLIPPAGE_BPS) / 10000) {
-            emit SlippageExceeded(tokenIn, tokenOut, expectedOut, amountOut);
-        }
-
-        emit TradeExecuted(tokenIn, tokenOut, amountIn, amountOut, adapter);
-    }
-
-    /**
-     * @dev Sell tokens for base token (USDC)
-     */
-    function sell(
-        address tokenIn,
-        address tokenOut, // Should be baseToken (USDC)
-        uint256 amountIn,
-        uint256 minAmountOut,
-        address recipient
-    ) external override onlyAuthorized nonReentrant returns (uint256 amountOut) {
-        require(tokenOut == baseToken, "TokenOut must be base token");
-        require(adapters[tokenIn].isActive, "No adapter for token");
-
-        // Transfer tokens from caller
-        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
-
-        // Get quote and check slippage
-        uint256 expectedOut = quote(tokenIn, tokenOut, amountIn);
-        require(expectedOut >= minAmountOut, "Insufficient output amount");
-
-        // Execute trade through adapter
-        address adapter = adapters[tokenIn].adapter;
-        IERC20(tokenIn).forceApprove(adapter, amountIn);
         
-        amountOut = IUniswapV3Adapter(adapter).swapExactInputSingle(
-            tokenIn,
-            tokenOut,
+        return amountOut;
+    }
+    
+    function swapUSDTtoUSDC(uint256 amountIn) external returns (uint256) {
+        USDT.transferFrom(msg.sender, address(this), amountIn);
+        USDT.approve(address(lbRouter), amountIn);
+        
+        IERC20[] memory tokenPath = new IERC20[](2);
+        tokenPath[0] = USDT;
+        tokenPath[1] = USDC;
+        
+        uint256[] memory pairBinSteps = new uint256[](1);
+        pairBinSteps[0] = 1;
+        
+        ILBRouter.Version[] memory versions = new ILBRouter.Version[](1);
+        versions[0] = ILBRouter.Version.V2_2;
+        
+        ILBRouter.Path memory path;
+        path.pairBinSteps = pairBinSteps;
+        path.versions = versions;
+        path.tokenPath = tokenPath;
+        
+        uint256 amountOutMin = amountIn * 99 / 100;
+        
+        uint256 amountOut = lbRouter.swapExactTokensForTokens(
             amountIn,
-            minAmountOut,
-            recipient
+            amountOutMin,
+            path,
+            msg.sender,
+            block.timestamp + 300
         );
-
-        // Verify slippage (same as buy function)
-        if (amountOut < expectedOut * (10000 - MAX_SLIPPAGE_BPS) / 10000) {
-            emit SlippageExceeded(tokenIn, tokenOut, expectedOut, amountOut);
-        }
-
-        emit TradeExecuted(tokenIn, tokenOut, amountIn, amountOut, adapter);
-    }
-
-    /**
-     * @dev Get quote for trade
-     */
-    function quote(
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn
-    ) public override returns (uint256 amountOut) {
-        if (tokenIn == baseToken) {
-            // Buying tokenOut with USDC
-            require(adapters[tokenOut].isActive, "No adapter for token");
-            return IUniswapV3Adapter(adapters[tokenOut].adapter).getAmountOut(
-                tokenIn,
-                tokenOut,
-                amountIn
-            );
-        } else {
-            // Selling tokenIn for USDC
-            require(adapters[tokenIn].isActive, "No adapter for token");
-            return IUniswapV3Adapter(adapters[tokenIn].adapter).getAmountOut(
-                tokenIn,
-                tokenOut,
-                amountIn
-            );
-        }
-    }
-
-    /**
-     * @dev Add adapter for a token
-     */
-    function addAdapter(address token, address adapter, uint256 gasLimit) external onlyOwner {
-        require(adapter != address(0), "Invalid adapter");
         
-        adapters[token] = AdapterInfo({
-            adapter: adapter,
-            isActive: true,
-            gasLimit: gasLimit
-        });
-
-        emit AdapterAdded(token, adapter);
+        return amountOut;
     }
-
-    /**
-     * @dev Authorize caller to use router
-     */
-    function authorizeCaller(address caller) external onlyOwner {
-        authorizedCallers[caller] = true;
+    
+    function swapUSDCtoAVAX(uint256 amountIn) external returns (uint256) {
+        USDC.transferFrom(msg.sender, address(this), amountIn);
+        USDC.approve(address(lbRouter), amountIn);
+        
+        IERC20[] memory tokenPath = new IERC20[](2);
+        tokenPath[0] = USDC;
+        tokenPath[1] = WAVAX;
+        
+        uint256[] memory pairBinSteps = new uint256[](1);
+        pairBinSteps[0] = 15;
+        
+        ILBRouter.Version[] memory versions = new ILBRouter.Version[](1);
+        versions[0] = ILBRouter.Version.V2_2;
+        
+        ILBRouter.Path memory path;
+        path.pairBinSteps = pairBinSteps;
+        path.versions = versions;
+        path.tokenPath = tokenPath;
+        
+        uint256 amountOutMin = amountIn * 1e18 * 99 / (35 * 1e6 * 100);
+        
+        uint256 amountOut = lbRouter.swapExactTokensForNATIVE(
+            amountIn,
+            amountOutMin,
+            path,
+            msg.sender,
+            block.timestamp + 300
+        );
+        
+        return amountOut;
     }
-
-    /**
-     * @dev Remove authorization
-     */
-    function deauthorizeCaller(address caller) external onlyOwner {
-        authorizedCallers[caller] = false;
+    
+    function swapAVAXtoUSDC() external payable returns (uint256) {
+        IERC20[] memory tokenPath = new IERC20[](2);
+        tokenPath[0] = WAVAX;
+        tokenPath[1] = USDC;
+        
+        uint256[] memory pairBinSteps = new uint256[](1);
+        pairBinSteps[0] = 15;
+        
+        ILBRouter.Version[] memory versions = new ILBRouter.Version[](1);
+        versions[0] = ILBRouter.Version.V2_2;
+        
+        ILBRouter.Path memory path;
+        path.pairBinSteps = pairBinSteps;
+        path.versions = versions;
+        path.tokenPath = tokenPath;
+        
+        uint256 amountOutMin = msg.value * 35 * 99 / (1e18 * 100 / 1e6);
+        
+        uint256 amountOut = lbRouter.swapExactNATIVEForTokens{value: msg.value}(
+            amountOutMin,
+            path,
+            msg.sender,
+            block.timestamp + 300
+        );
+        
+        return amountOut;
+    }
+    
+    function swapAVAXtoUSDT() external payable returns (uint256) {
+        IERC20[] memory tokenPath = new IERC20[](2);
+        tokenPath[0] = WAVAX;
+        tokenPath[1] = USDT;
+        
+        uint256[] memory pairBinSteps = new uint256[](1);
+        pairBinSteps[0] = 15;
+        
+        ILBRouter.Version[] memory versions = new ILBRouter.Version[](1);
+        versions[0] = ILBRouter.Version.V2_2;
+        
+        ILBRouter.Path memory path;
+        path.pairBinSteps = pairBinSteps;
+        path.versions = versions;
+        path.tokenPath = tokenPath;
+        
+        uint256 amountOutMin = msg.value * 35 * 99 / (1e18 * 100 / 1e6);
+        
+        uint256 amountOut = lbRouter.swapExactNATIVEForTokens{value: msg.value}(
+            amountOutMin,
+            path,
+            msg.sender,
+            block.timestamp + 300
+        );
+        
+        return amountOut;
+    }
+    
+    function swapUSDTtoAVAX(uint256 amountIn) external returns (uint256) {
+        USDT.transferFrom(msg.sender, address(this), amountIn);
+        USDT.approve(address(lbRouter), amountIn);
+        
+        IERC20[] memory tokenPath = new IERC20[](2);
+        tokenPath[0] = USDT;
+        tokenPath[1] = WAVAX;
+        
+        uint256[] memory pairBinSteps = new uint256[](1);
+        pairBinSteps[0] = 15;
+        
+        ILBRouter.Version[] memory versions = new ILBRouter.Version[](1);
+        versions[0] = ILBRouter.Version.V2_2;
+        
+        ILBRouter.Path memory path;
+        path.pairBinSteps = pairBinSteps;
+        path.versions = versions;
+        path.tokenPath = tokenPath;
+        
+        uint256 amountOutMin = amountIn * 1e18 * 99 / (35 * 1e6 * 100);
+        
+        uint256 amountOut = lbRouter.swapExactTokensForNATIVE(
+            amountIn,
+            amountOutMin,
+            path,
+            msg.sender,
+            block.timestamp + 300
+        );
+        
+        return amountOut;
     }
 }
