@@ -26,7 +26,7 @@ interface AggregatorV3Interface {
     );
 }
 
-contract AVAXPriceFeed {
+contract OracleAggregator {
     
     AggregatorV3Interface internal priceFeed;
     
@@ -40,7 +40,8 @@ contract AVAXPriceFeed {
         priceFeed = AggregatorV3Interface(0x5498BB86BC934c8D34FDA08E81D444153d0D06aD);
     }
 
-    function getLatestPrice() public view returns (int256) {
+    // _asset parameter not used for now, as this oracle only provides AVAX/USD price
+    function getPrice(address _asset) public view returns (uint256) {
         (
             /* uint80 roundID */,
             int256 price,
@@ -49,7 +50,7 @@ contract AVAXPriceFeed {
             /* uint80 answeredInRound */
         ) = priceFeed.latestRoundData();
         
-        return price;
+        return uint256(price);
     }
     
     function getLatestRoundData() public view returns (
@@ -71,7 +72,7 @@ contract AVAXPriceFeed {
     }
 
     function getPriceIn18Decimals() public view returns (uint256) {
-        int256 price = getLatestPrice();
+        uint256 price = getPrice(address(0));
         require(price > 0, "Invalid price");
         
         uint8 decimals = getDecimals();
@@ -87,7 +88,7 @@ contract AVAXPriceFeed {
     }
 
     function getPriceWithDecimals(uint8 targetDecimals) public view returns (uint256) {
-        int256 price = getLatestPrice();
+        uint256 price = getPrice(address(0));
         require(price > 0, "Invalid price");
         
         uint8 sourceDecimals = getDecimals();

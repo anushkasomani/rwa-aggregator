@@ -26,7 +26,7 @@ interface ILBRouter {
     ) external returns (uint256 amountOut);
 }
 
-contract FixedUnifiedOrderRouter {
+contract OrderRouter {
     
     ILBRouter public immutable lbRouter;
     

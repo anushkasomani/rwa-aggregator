@@ -21,7 +21,7 @@ const config: HardhatUserConfig = {
   },
   paths: {
     sources: "./src", // <-- Add this line
-    tests: "./test/hardhat",
+    tests: "./test",
     cache: "./cache",
     artifacts: "./artifacts"
   },
@@ -42,7 +42,7 @@ const config: HardhatUserConfig = {
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       gasPrice: 100000000, // 0.1 gwei
     },
-    avalancheFuji: {
+    fuji: {
       url: "https://api.avax-test.network/ext/bc/C/rpc",
       chainId: 43113,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],

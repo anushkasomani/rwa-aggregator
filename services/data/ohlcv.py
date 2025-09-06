@@ -17,7 +17,7 @@ def ccxt_ohlcv(symbol_pair="BTC/USDT", exchange_id="binance", timeframe="1d", si
         time.sleep(ex.rateLimit/1000.0)
     df = pd.DataFrame(rows, columns=["t","open","high","low","close","volume"]).set_index("t")
     df.index = pd.to_datetime(df.index, unit="ms", utc=True)
-    return df[["close","volume"]].resample("1D").last().dropna()
+    return df[["open","high","low","close","volume"]].resample("1D").last().dropna()
 
 def cg_market_chart_range(symbol: str, vs="usd", days=540):
     cid = COINGECKO_IDS[symbol]
@@ -32,7 +32,12 @@ def cg_market_chart_range(symbol: str, vs="usd", days=540):
     df = pd.concat([dfp, dfv], axis=1)
     df.index = pd.to_datetime(df.index, unit="ms", utc=True)
     df = df.resample("1D").last().dropna()
-    return df.rename(columns={"price":"close"})[["close","volume"]]
+    df = df.rename(columns={"price":"close"})
+    # CoinGecko only provides close price and volume, so create synthetic OHLC
+    df["open"] = df["close"]
+    df["high"] = df["close"] 
+    df["low"] = df["close"]
+    return df[["open","high","low","close","volume"]]
 
 def load_ohlcv(symbol: str, days: int) -> pd.DataFrame:
     try:
