@@ -38,7 +38,7 @@ contract BasketFactory is Ownable, ReentrancyGuard {
     mapping(address => bool) public isValidBasket;
     mapping(address => address[]) public basketsByCreator;
     
-    uint256 public constant MIN_ASSETS = 3;
+    uint256 public constant MIN_ASSETS = 1;
     uint256 public constant MAX_ASSETS = 10;
     uint256 public constant TOTAL_WEIGHT = 10000;
     

@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "../interfaces/IERC20Extended.sol";
 
 /**
  * @title MultiAssetVault
@@ -360,12 +361,10 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
      * @dev Deploy pending USDC to buy a specific asset
      * @param asset Address of asset to buy
      * @param usdcAmount Amount of USDC to deploy
-     * @param minAssetAmount Minimum amount of asset to receive
      */
     function deployCapital(
         address asset,
-        uint256 usdcAmount,
-        uint256 minAssetAmount
+        uint256 usdcAmount
     ) external onlyBot whenNotPaused returns (uint256 assetAmount) {
         AssetAllocation storage allocation = assetAllocations[asset];
         if (allocation.weight == 0) revert AssetNotInBasket();
@@ -375,12 +374,7 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
         baseToken.safeIncreaseAllowance(orderRouter, usdcAmount);
 
         // Execute swap through OrderRouter
-        IOrderRouter(orderRouter).swapBaseToAsset(
-            asset,
-            usdcAmount,
-            minAssetAmount,
-            block.timestamp + 300  // 5 minute deadline
-        );
+        IOrderRouter(orderRouter).swapNoSlippage(address(baseToken), asset, usdcAmount);
 
         // Update balances
         assetAmount = IERC20(asset).balanceOf(address(this)) - allocation.balance;
@@ -397,12 +391,10 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
      * @dev Liquidate an asset position back to USDC
      * @param asset Address of asset to sell
      * @param assetAmount Amount of asset to sell (0 for all)
-     * @param minUSDC Minimum USDC to receive
      */
     function liquidateAsset(
         address asset,
-        uint256 assetAmount,
-        uint256 minUSDC
+        uint256 assetAmount
     ) external onlyBot returns (uint256 usdcReceived) {
         AssetAllocation storage allocation = assetAllocations[asset];
         if (allocation.weight == 0) revert AssetNotInBasket();
@@ -418,12 +410,7 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
 
         // Execute swap through OrderRouter
         uint256 usdcBefore = baseToken.balanceOf(address(this));
-        IOrderRouter(orderRouter).swapAssetToBase(
-            asset,
-            assetAmount,
-            minUSDC,
-            block.timestamp + 300
-        );
+        IOrderRouter(orderRouter).swapNoSlippage(asset, address(baseToken), assetAmount);
         usdcReceived = baseToken.balanceOf(address(this)) - usdcBefore;
 
         // Update balances
@@ -452,8 +439,9 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
             AssetAllocation memory allocation = assetAllocations[basketAssets[i]];
             if (allocation.balance > 0) {
                 // Convert asset balance to USDC value
-                // Assuming assetPrices are in USDC per token with 1e6 scale
-                totalValue += (allocation.balance * assetPrices[i]) / 1e18;
+                // assetPrices are in USDC per token with 1e6 scale
+                // For now, assume all assets have 6 decimals to match USDC scale
+                totalValue += (allocation.balance * assetPrices[i]) / 1e6;
             }
         }
 
@@ -587,17 +575,16 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
 
 // Interface for OrderRouter
 interface IOrderRouter {
-    function swapBaseToAsset(
-        address targetAsset,
-        uint256 amountIn,
-        uint256 minAmountOut,
-        uint256 deadline
-    ) external returns (uint256 amountOut);
+    function swapNoSlippage(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn
+    ) external returns (uint256);
 
-    function swapAssetToBase(
-        address sourceAsset,
+     function swap(
+        address tokenIn,
+        address tokenOut,
         uint256 amountIn,
-        uint256 minAmountOut,
-        uint256 deadline
-    ) external returns (uint256 amountOut);
+        uint256 minAmountOut  // Let caller specify exact minimum
+    ) external returns (uint256);
 }

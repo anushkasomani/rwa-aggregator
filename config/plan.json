@@ -1,0 +1,42 @@
+{
+  "name": "Conservative Strategy",
+  "regime": "auto",
+  "direction_bias": "neutral",
+  "universe": ["BTC", "ETH"],
+  "custom_rules": [
+    "CLOSE>SMA(30)",
+    "SENTIMENT>=GOOD"
+  ],
+  "gates": {},
+  "weighting": {
+    "mode": "composite",
+    "coeffs": {
+      "trend": 0.35,
+      "momentum": 0.35,
+      "volume": 0.15,
+      "sentiment": 0.15
+    },
+    "tilt_sentiment_pct": 0.10
+  },
+  "rebalance": {
+    "cadence": "weekly",
+    "band_pp": 5.0,
+    "turnover_max": 0.15
+  },
+  "risk": {
+    "max_weight": 0.40,
+    "hard_cap": 0.50,
+    "slippage_max_bps": 80,
+    "order_max_usd": 2000,
+    "cooldown_hours": 6
+  },
+  "execution": {
+    "chunk_usd": 2000,
+    "use_yield": false
+  },
+  "sentiment_cfg": {
+    "good_threshold": 0.30,
+    "bad_threshold": -0.30,
+    "shock_delta_24h": 0.50
+  }
+}

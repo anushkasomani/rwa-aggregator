@@ -2,9 +2,8 @@
 pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "../interfaces/IERC20Extended.sol";
 
-contract MockERC20 is ERC20, IERC20Extended {
+contract MockERC20 is ERC20 {
     uint8 private _decimals;
     
     constructor(
@@ -15,16 +14,8 @@ contract MockERC20 is ERC20, IERC20Extended {
         _decimals = decimals_;
     }
     
-    function decimals() public view override(ERC20, IERC20Extended) returns (uint8) {
+    function decimals() public view override returns (uint8) {
         return _decimals;
-    }
-    
-    function name() public view override(ERC20, IERC20Extended) returns (string memory) {
-        return super.name();
-    }
-    
-    function symbol() public view override(ERC20, IERC20Extended) returns (string memory) {
-        return super.symbol();
     }
     
     function mint(address to, uint256 amount) external {
