@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Executor Bot — multi‑vault, active, copy‑paste ready
+Executor Bot — multi-vault, active, copy-paste ready
 ===================================================
 
 Fits your Blocks (1–15) without modifying others. It now:
@@ -9,7 +9,7 @@ Fits your Blocks (1–15) without modifying others. It now:
   crossovers (e.g., price falls below 30D SMA) trigger SELLs immediately — not
   only on weekly cadence — while still sharing a single source of truth
 - Continuously checks bands, turnover, slippage, cooldown, and executes per plan
-- Emits Safe‑ready calldata for Roles; or executes via EOA
+- Emits Safe-ready calldata for Roles; or executes via EOA
 
 Config (env)
 ------------
@@ -23,12 +23,12 @@ export UNIV3_QUOTER="0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6"
 export USDC="0xA0b8...eB48"
 export CHAINLINK_FEEDS='{"USDC":"0x...","WETH":"0x...","WBTC":"0x...","WSOL":"0x0"}'
 
-# Single‑vault (fallback) — same as before
+# Single-vault (fallback) — same as before
 export VAULT_ADDRESS="0xYourVault"
 export VAULT_ALLOWED_TOKENS='{"USDC":"0x...","ETH":"0xWETH","BTC":"0xWBTC","SOL":"0xWSOL"}'
 export PLAN_JSON_PATH="/path/plan.json"  # or set PLANNER_URL + PLAN_TEXT
 
-# Multi‑vault (preferred)
+# Multi-vault (preferred)
 # VAULTS_JSON is a JSON array of vault configs (see example below)
 export VAULTS_JSON='[
   {
@@ -67,6 +67,18 @@ from web3.middleware import ExtraDataToPOAMiddleware
 from eth_account import Account
 from eth_typing import ChecksumAddress
 
+# Import contract ABIs
+from abis import (
+    ERC20_ABI,
+    MULTI_ASSET_VAULT_ABI,
+    ORDER_ROUTER_ABI,
+    ORACLE_AGGREGATOR_ABI,
+    UNIV3_QUOTER_ABI,
+    # Backward compatibility
+    CHAINLINK_AGG_ABI,
+    UNIV3_ROUTER_ABI
+)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Blocks 1/2/3/4: Planner → Data → Engine
 # ──────────────────────────────────────────────────────────────────────────────
@@ -91,62 +103,8 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL, format="[%(asctime)s] %(levelname)s - %(message)s")
 log = logging.getLogger("executor-bot")
 
-# --------------------------- ABIs (minimal) ---------------------------
-ERC20_ABI = [
-    {"constant":True, "inputs":[], "name":"decimals","outputs":[{"name":"","type":"uint8"}], "stateMutability":"view","type":"function"},
-    {"constant":True, "inputs":[], "name":"symbol","outputs":[{"name":"","type":"string"}], "stateMutability":"view","type":"function"},
-    {"constant":True, "inputs":[{"name":"account","type":"address"}], "name":"balanceOf","outputs":[{"name":"","type":"uint256"}], "stateMutability":"view","type":"function"},
-    {"constant":True, "inputs":[{"name":"owner","type":"address"},{"name":"spender","type":"address"}], "name":"allowance","outputs":[{"name":"","type":"uint256"}], "stateMutability":"view","type":"function"},
-    {"constant":False, "inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}], "name":"approve","outputs":[{"name":"","type":"bool"}], "stateMutability":"nonpayable","type":"function"}
-]
-
-UNIV3_ROUTER_ABI = [
-    {
-      "inputs": [
-        {"components": [
-          {"internalType": "address", "name": "tokenIn", "type": "address"},
-          {"internalType": "address", "name": "tokenOut", "type": "address"},
-          {"internalType": "uint24",  "name": "fee", "type": "uint24"},
-          {"internalType": "address", "name": "recipient", "type": "address"},
-          {"internalType": "uint256","name": "deadline", "type": "uint256"},
-          {"internalType": "uint256","name": "amountIn", "type": "uint256"},
-          {"internalType": "uint256","name": "amountOutMinimum", "type": "uint256"},
-          {"internalType": "uint160","name": "sqrtPriceLimitX96", "type": "uint160"}
-        ], "internalType": "struct ISwapRouter.ExactInputSingleParams", "name": "params", "type": "tuple"}
-      ],
-      "name": "exactInputSingle",
-      "outputs": [{"internalType": "uint256", "name": "amountOut", "type": "uint256"}],
-      "stateMutability": "payable",
-      "type": "function"
-    }
-]
-
-UNIV3_QUOTER_ABI = [
-    {
-      "inputs": [
-        {"internalType":"address","name":"tokenIn","type":"address"},
-        {"internalType":"address","name":"tokenOut","type":"address"},
-        {"internalType":"uint256","name":"amountIn","type":"uint256"},
-        {"internalType":"uint24","name":"fee","type":"uint24"},
-        {"internalType":"uint160","name":"sqrtPriceLimitX96","type":"uint160"}
-      ],
-      "name": "quoteExactInputSingle",
-      "outputs": [{"internalType":"uint256","name":"amountOut","type":"uint256"}],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    }
-]
-
-CHAINLINK_AGG_ABI = [
-    {"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"},
-    {"inputs":[],"name":"latestRoundData","outputs":[
-        {"internalType":"uint80","name":"roundId","type":"uint80"},
-        {"internalType":"int256","name":"answer","type":"int256"},
-        {"internalType":"uint256","name":"startedAt","type":"uint256"},
-        {"internalType":"uint256","name":"updatedAt","type":"uint256"},
-        {"internalType":"uint80","name":"answeredInRound","type":"uint80"}
-    ],"stateMutability":"view","type":"function"}
-]
+# --------------------------- ABIs imported from abis.py ---------------------------
+# ABIs are now imported from the separate abis.py file for better organization
 
 # ---------------------------- Data classes ----------------------------
 @dataclass
@@ -194,53 +152,71 @@ class Chain:
     def erc20(self, addr: str):
         return self.w3.eth.contract(address=self.w3.to_checksum_address(addr), abi=ERC20_ABI)
 
-    def router(self, addr: str):
-        return self.w3.eth.contract(address=self.w3.to_checksum_address(addr), abi=UNIV3_ROUTER_ABI)
+    def order_router(self, addr: str):
+        return self.w3.eth.contract(address=self.w3.to_checksum_address(addr), abi=ORDER_ROUTER_ABI)
+
+    def multi_asset_vault(self, addr: str):
+        return self.w3.eth.contract(address=self.w3.to_checksum_address(addr), abi=MULTI_ASSET_VAULT_ABI)
+
+    def oracle_aggregator(self, addr: str):
+        return self.w3.eth.contract(address=self.w3.to_checksum_address(addr), abi=ORACLE_AGGREGATOR_ABI)
 
     def quoter(self, addr: str):
         return self.w3.eth.contract(address=self.w3.to_checksum_address(addr), abi=UNIV3_QUOTER_ABI)
 
+    # Backward compatibility methods
+    def router(self, addr: str):
+        return self.order_router(addr)
+
     def chainlink(self, addr: str):
-        return self.w3.eth.contract(address=self.w3.to_checksum_address(addr), abi=CHAINLINK_AGG_ABI)
+        return self.oracle_aggregator(addr)
 
 # ----------------------------- Oracle (Block 9) -----------------------
 class PriceOracle:
-    """Primary: Chainlink; Fallback: Uniswap Quoter vs USDC."""
-    def __init__(self, chain: Chain, chainlink_feeds: Dict[str, str], quoter_addr: str, usdc_addr: str):
+    """Uses OracleAggregator for price feeds."""
+    def __init__(self, chain: Chain, oracle_feeds: Dict[str, str], usdc_addr: str):
         self.c = chain
-        self.feeds = {k.upper(): self.c.w3.to_checksum_address(v) for k,v in chainlink_feeds.items() if v and v != '0x0000000000000000000000000000000000000000'}
-        self.quoter = self.c.quoter(quoter_addr) if quoter_addr else None
+        self.feeds = {k.upper(): self.c.w3.to_checksum_address(v) for k,v in oracle_feeds.items() if v and v != '0x0000000000000000000000000000000000000000'}
         self.usdc = self.c.erc20(usdc_addr)
         self.usdc_decimals = self.usdc.functions.decimals().call()
 
     def price_usd(self, symbol: str, token_addr: str) -> float:
         sym = symbol.upper()
         if sym in self.feeds:
-            agg = self.c.chainlink(self.feeds[sym])
-            _rid, ans, _sa, updated, _a = agg.functions.latestRoundData().call()
-            if int(ans) <= 0:
-                raise RuntimeError(f"Chainlink non-positive for {sym}")
-            dec = agg.functions.decimals().call()
-            # stale log only (6h)
-            if int(time.time()) - int(updated) > 6*3600:
-                log.warning("Chainlink %s stale at %s", sym, updated)
-            return float(ans) / (10 ** dec)
-        if not self.quoter:
-            raise RuntimeError(f"No Chainlink feed and Quoter not set for {sym}")
-        token = self.c.erc20(token_addr)
-        token_dec = token.functions.decimals().call()
-        one_usdc = 10 ** self.usdc_decimals
-        out = self.quoter.functions.quoteExactInputSingle(self.usdc.address, token_addr, one_usdc, 3000, 0).call()
-        if int(out) == 0:
-            raise RuntimeError(f"Quoter returned 0 for {sym}")
-        return 1.0 / (out / (10 ** token_dec))
+            # Use OracleAggregator
+            agg = self.c.oracle_aggregator(self.feeds[sym])
+            try:
+                # Try the custom getPrice function first
+                price = agg.functions.getPrice(token_addr).call()
+                if int(price) > 0:
+                    # OracleAggregator returns price with proper decimals
+                    dec = agg.functions.getDecimals().call()
+                    return float(price) / (10 ** dec)
+            except Exception as e:
+                log.warning(f"OracleAggregator getPrice failed for {sym}: {e}")
+            
+            # Fallback to standard Chainlink latestRoundData
+            try:
+                _rid, ans, _sa, updated, _a = agg.functions.latestRoundData().call()
+                if int(ans) <= 0:
+                    raise RuntimeError(f"Oracle non-positive price for {sym}")
+                dec = agg.functions.getDecimals().call()
+                # stale log only (6h)
+                if int(time.time()) - int(updated) > 6*3600:
+                    log.warning("Oracle %s stale at %s", sym, updated)
+                return float(ans) / (10 ** dec)
+            except Exception as e:
+                log.error(f"Oracle latestRoundData failed for {sym}: {e}")
+                raise
+        
+        raise RuntimeError(f"No Oracle feed configured for {sym}")
 
 # -------------------------- Router (Block 8) --------------------------
 class RouterClient:
-    """Uniswap V3 exactInputSingle (EOA path). For Safe+Roles we emit calldata."""
+    """OrderRouter client for TraderJoe LBRouter swaps. For Safe+Roles we emit calldata."""
     def __init__(self, chain: Chain, router_addr: str, account: Optional[Account], usdc_addr: str):
         self.c = chain
-        self.router = self.c.router(router_addr)
+        self.router = self.c.order_router(router_addr)
         self.acct = account
         self.usdc = self.c.erc20(usdc_addr)
         self.usdc_decimals = self.usdc.functions.decimals().call()
@@ -254,46 +230,81 @@ class RouterClient:
             'nonce': self.c.w3.eth.get_transaction_count(owner),
         })
         signed = self.c.w3.eth.account.sign_transaction(tx, private_key=self.acct.key)
-        txh = self.c.w3.eth.send_raw_transaction(signed.rawTransaction)
+        txh = self.c.w3.eth.send_raw_transaction(signed.raw_transaction)
         rcpt = self.c.w3.eth.wait_for_transaction_receipt(txh)
         if rcpt.status != 1:
             raise RuntimeError("ERC20 approve failed")
         log.info("Approved %s → %s", token.address, spender)
 
-    def _build_params(self, token_in, token_out, recipient, amount_in, min_out, fee_bps=3000):
-        return {
-            'tokenIn': token_in,
-            'tokenOut': token_out,
-            'fee': int(fee_bps),
-            'recipient': recipient,
-            'deadline': int(time.time()) + 1200,
-            'amountIn': int(amount_in),
-            'amountOutMinimum': int(min_out),
-            'sqrtPriceLimitX96': 0
-        }
-
-    def dryrun_payload(self, params: dict) -> dict:
-        fn = self.router.get_function_by_name('exactInputSingle')
-        data = fn(params).build_transaction({'from': '0x0000000000000000000000000000000000000000'})['data']
-        return {'to': self.router.address, 'value': 0, 'data': data, 'operation': 0}
-
-    def submit(self, params: dict) -> str:
-        assert self.acct is not None, "EOA account required for EOA_DIRECT"
+    def swap_no_slippage(self, token_in: str, token_out: str, amount_in: int) -> str:
+        """Execute swapNoSlippage - direct EOA execution only"""
+        assert self.acct is not None, "EOA account required for direct execution"
         owner = self.acct.address
-        token_in = self.c.erc20(params['tokenIn'])
-        self._ensure_allowance(token_in, owner, self.router.address, int(params['amountIn']))
-        tx = self.router.functions.exactInputSingle(params).build_transaction({
+        token_in_contract = self.c.erc20(token_in)
+        
+        # Ensure allowance
+        self._ensure_allowance(token_in_contract, owner, self.router.address, amount_in)
+        
+        # Execute swap
+        tx = self.router.functions.swapNoSlippage(token_in, token_out, amount_in).build_transaction({
             'from': owner,
             'nonce': self.c.w3.eth.get_transaction_count(owner),
             'value': 0,
         })
         signed = self.c.w3.eth.account.sign_transaction(tx, private_key=self.acct.key)
-        txh = self.c.w3.eth.send_raw_transaction(signed.rawTransaction)
+        txh = self.c.w3.eth.send_raw_transaction(signed.raw_transaction)
         rcpt = self.c.w3.eth.wait_for_transaction_receipt(txh)
         if rcpt.status != 1:
             raise RuntimeError(f"Swap failed: {txh.hex()}")
+        
         log.info("Swap ok: %s", txh.hex())
         return txh.hex()
+    
+    # MultiAssetVault transaction execution methods
+    def execute_vault_tx(self, vault_addr: str, vault_function) -> str:
+        """Execute vault transaction - direct EOA execution only"""
+        assert self.acct is not None, "EOA account required for direct execution"
+        owner = self.acct.address
+        
+        # Build and execute transaction
+        tx = vault_function.build_transaction({
+            'from': owner,
+            'nonce': self.c.w3.eth.get_transaction_count(owner),
+            'value': 0,
+        })
+        signed = self.c.w3.eth.account.sign_transaction(tx, private_key=self.acct.key)
+        txh = self.c.w3.eth.send_raw_transaction(signed.raw_transaction)
+        rcpt = self.c.w3.eth.wait_for_transaction_receipt(txh)
+        if rcpt.status != 1:
+            raise RuntimeError(f"Vault transaction failed: {txh.hex()}")
+        
+        log.info("Vault tx ok: %s", txh.hex())
+        return txh.hex()
+    
+    def process_deposits(self, vault_client) -> str:
+        """Execute processDepositQueue on vault"""
+        vault_fn = vault_client.process_deposit_queue()
+        return self.execute_vault_tx(vault_client.vault, vault_fn)
+    
+    def process_redemptions(self, vault_client) -> str:
+        """Execute processRedemptionQueue on vault"""
+        vault_fn = vault_client.process_redemption_queue()
+        return self.execute_vault_tx(vault_client.vault, vault_fn)
+    
+    def deploy_capital(self, vault_client, asset_addr: str, usdc_amount: int) -> str:
+        """Execute deployCapital on vault"""
+        vault_fn = vault_client.deploy_capital(asset_addr, usdc_amount)
+        return self.execute_vault_tx(vault_client.vault, vault_fn)
+    
+    def liquidate_asset(self, vault_client, asset_addr: str, asset_amount: int) -> str:
+        """Execute liquidateAsset on vault"""
+        vault_fn = vault_client.liquidate_asset(asset_addr, asset_amount)
+        return self.execute_vault_tx(vault_client.vault, vault_fn)
+    
+    def update_nav(self, vault_client, asset_prices: List[int]) -> str:
+        """Execute updateNAV on vault"""
+        vault_fn = vault_client.update_nav(asset_prices)
+        return self.execute_vault_tx(vault_client.vault, vault_fn)
 
 # --------------------------- Vault interface --------------------------
 class VaultClient:
@@ -317,8 +328,93 @@ class VaultClient:
             bal = self.c.erc20(info.address).functions.balanceOf(self.vault).call()
             out[sym] = int(bal)
         return out
+    
+    # MultiAssetVault-specific methods
+    def get_total_value(self) -> int:
+        """Get total value in USDC from MultiAssetVault."""
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.getTotalValue().call()
+    
+    def get_pending_deposits(self) -> int:
+        """Get pending USDC deposits."""
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.getPendingDeposits().call()
+    
+    def get_pending_redemptions(self) -> int:
+        """Get pending share redemptions."""
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.getPendingRedemptions().call()
+    
+    def get_basket_assets(self) -> List[str]:
+        """Get list of basket asset addresses."""
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.getBasketAssets().call()
+    
+    def get_asset_allocation(self, asset_addr: str) -> Tuple[int, int, bool]:
+        """Get asset allocation: (weight, balance, isActive)."""
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.getAssetAllocation(asset_addr).call()
+    
+    def get_pending_usdc(self) -> int:
+        """Get pending USDC amount."""
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.pendingUSDC().call()
+    
+    def get_deployed_usdc(self) -> int:
+        """Get deployed USDC amount."""
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.deployedUSDC().call()
+    
+    # Bot management functions (require transactions)
+    def process_deposit_queue(self):
+        """Process pending deposits in the queue."""
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.processDepositQueue()
+    
+    def process_redemption_queue(self):
+        """Process pending redemptions in the queue."""
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.processRedemptionQueue()
+    
+    def deploy_capital(self, asset_addr: str, usdc_amount: int):
+        """Deploy USDC capital to buy the specified asset.
+        
+        Args:
+            asset_addr: Address of the asset to buy
+            usdc_amount: Amount of USDC to deploy
+            
+        Returns:
+            Transaction function for deployCapital
+        """
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.deployCapital(asset_addr, usdc_amount)
+    
+    def liquidate_asset(self, asset_addr: str, asset_amount: int):
+        """Liquidate asset back to USDC.
+        
+        Args:
+            asset_addr: Address of the asset to liquidate
+            asset_amount: Amount of asset to liquidate
+            
+        Returns:
+            Transaction function for liquidateAsset
+        """
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.liquidateAsset(asset_addr, asset_amount)
+    
+    def update_nav(self, asset_prices: List[int]):
+        """Update Net Asset Value with current asset prices.
+        
+        Args:
+            asset_prices: List of asset prices in proper decimals
+            
+        Returns:
+            Transaction function for updateNAV
+        """
+        vault = self.c.multi_asset_vault(self.vault)
+        return vault.functions.updateNAV(asset_prices)
 
-# --------------------------- Single‑vault Executor --------------------
+# --------------------------- Single-vault Executor --------------------
 class Executor:
     def __init__(self,
                  w3: Web3,
@@ -327,7 +423,6 @@ class Executor:
                  allowed_tokens: Dict[str,str],
                  chainlink_feeds: Dict[str,str],
                  router_addr: str,
-                 quoter_addr: str,
                  usdc_addr: str,
                  cp_key: str,
                  execution_mode: str = "DRY_RUN",
@@ -336,7 +431,7 @@ class Executor:
         self.c = Chain(w3)
         self.plan = plan
         self.vault = VaultClient(self.c, vault_addr, allowed_tokens)
-        self.oracle = PriceOracle(self.c, chainlink_feeds, quoter_addr, usdc_addr)
+        self.oracle = PriceOracle(self.c, chainlink_feeds, usdc_addr)
         self.router = RouterClient(self.c, router_addr, Account.from_key(private_key) if (private_key and execution_mode=="EOA_DIRECT") else None, usdc_addr)
         self.cp_key = cp_key
         self.exec_mode = execution_mode
@@ -349,8 +444,11 @@ class Executor:
         meta = analyze_plan(self.plan)
         assets = meta["assets"]; days = meta["lookback_days"]
         
-        # Data - Load OHLCV and sentiment using NEW function names
-        ohlcv = {a: load_ohlcv(a, days) for a in assets}
+        # Data - Load OHLCV and sentiment using NEW function names  
+        # Skip stablecoins for price analysis (they don't have meaningful price movements)
+        STABLECOINS = ["USDT", "USDC", "DAI", "BUSD", "FRAX"]
+        trading_assets = [a for a in assets if a.upper() not in STABLECOINS]
+        ohlcv = {a: load_ohlcv(a, days) for a in trading_assets}
         headlines = fetch_headlines(auth_token=self.cp_key)  # NEW function name
         sentiment = rolling_sentiment(headlines)             # NEW function name
         
@@ -388,7 +486,8 @@ class Executor:
         usd_values: Dict[str,float] = {}
         for sym, raw in bals.items():
             info = self.vault.tokens[sym]
-            px = 1.0 if sym.upper()=="USDC" else self.oracle.price_usd(sym, info.address)
+            print("Token info:", info)
+            px = 1.0 if sym.upper()=="USDC" or sym.upper()=="USDT" else self.oracle.price_usd(sym, info.address)
             qty = raw / (10 ** info.decimals)
             usd = qty * px
             usd_values[sym] = usd
@@ -430,27 +529,21 @@ class Executor:
         s = sym.upper(); assert s in self.vault.tokens, f"Unknown token {sym}"
         return self.vault.tokens[s]
 
-    def _amounts_for_order(self, od: SwapChunk) -> Tuple[int,int,ChecksumAddress,ChecksumAddress]:
+    def _amounts_for_order(self, od: SwapChunk) -> Tuple[int,ChecksumAddress,ChecksumAddress]:
         t_asset = self._token_of(od.asset)
         usdc = self._token_of("USDC")
-        sl = od.slippage_bps / 10_000.0
+        
         if od.side == "BUY":
+            # Buy asset with USDC
             amount_in = int(round(od.usd * (10 ** usdc.decimals)))
-            try:
-                quoted = self.oracle.quoter.functions.quoteExactInputSingle(usdc.address, t_asset.address, amount_in, od.fee_bps, 0).call()
-            except Exception:
-                px = self.oracle.price_usd(od.asset, t_asset.address)
-                quoted = int((od.usd / px) * (10 ** t_asset.decimals))
-            min_out = int(quoted * (1 - sl))
-            return amount_in, min_out, usdc.address, t_asset.address
+            return amount_in, usdc.address, t_asset.address
         else:
+            # Sell asset for USDC
             px = self.oracle.price_usd(od.asset, t_asset.address)
             amount_in = int((od.usd / px) * (10 ** t_asset.decimals))
-            expected_out = int(round(od.usd * (10 ** usdc.decimals)))
-            min_out = int(expected_out * (1 - sl))
-            return amount_in, min_out, t_asset.address, usdc.address
+            return amount_in, t_asset.address, usdc.address
 
-    # -------------------- Execute (Block 8; Block 7 payloads) ----------------
+    # -------------------- Execute (Block 8) - Direct EOA only ----------------
     def _execute_orders(self, orders: List[SwapChunk]):
         if not orders:
             log.info("No trades — bands not triggered.")
@@ -462,15 +555,12 @@ class Executor:
             i = 0
             while remain > 1e-6:
                 usd = min(remain, chunk_usd); i += 1
-                a_in, min_out, token_in, token_out = self._amounts_for_order(dataclasses.replace(od, usd=usd))
-                params = self.router._build_params(token_in, token_out, recipient=self.vault.vault, amount_in=a_in, min_out=min_out, fee_bps=od.fee_bps)
-                # Emit Safe‑ready payload (Block 7)
-                payload = self.router.dryrun_payload(params)
-                log.info("SAFE_PAYLOAD %s", json.dumps({"to": payload['to'], "data": payload['data'], "value": payload['value'], "op": payload['operation'], "note": f"{od.side} {od.asset} ${usd:.2f}"}))
+                a_in, token_in, token_out = self._amounts_for_order(dataclasses.replace(od, usd=usd))
+                
                 if self.exec_mode == "DRY_RUN":
-                    log.info("DRY_RUN [%s %s $%.2f #%d]", od.side, od.asset, usd, i)
+                    log.info("DRY_RUN [%s %s $%.2f #%d] %s→%s amount=%d", od.side, od.asset, usd, i, token_in, token_out, a_in)
                 elif self.exec_mode == "EOA_DIRECT":
-                    txh = self.router.submit(params)
+                    txh = self.router.swap_no_slippage(token_in, token_out, a_in)
                     log.info("Executed chunk #%d %s %s $%.2f tx=%s", i, od.side, od.asset, usd, txh)
                 else:
                     raise RuntimeError(f"Unsupported EXECUTION_MODE={self.exec_mode}")
@@ -493,8 +583,178 @@ class Executor:
         except Exception as e:
             _post_alert("BOT_ERROR", f"{type(e).__name__}: {e}")
             log.exception("Executor error")
+    
+    # MultiAssetVault-specific execution method
+    def run_vault_cycle(self):
+        """Enhanced execution cycle for MultiAssetVault with queue processing and NAV updates."""
+        try:
+            # Step 1: Process pending deposits and redemptions
+            if self.exec_mode == "EOA_DIRECT":
+                try:
+                    pending_deposits = self.vault.get_pending_deposits()
+                    if pending_deposits > 0:
+                        log.info("Processing %d pending deposits", pending_deposits)
+                        self.router.process_deposits(self.vault)
+                except Exception as e:
+                    log.warning("Failed to process deposits: %s", e)
+                
+                try:
+                    pending_redemptions = self.vault.get_pending_redemptions()
+                    if pending_redemptions > 0:
+                        log.info("Processing %d pending redemptions", pending_redemptions)
+                        self.router.process_redemptions(self.vault)
+                except Exception as e:
+                    log.warning("Failed to process redemptions: %s", e)
+            
+            # Step 2: Update NAV with current asset prices
+            try:
+                basket_assets = self.vault.get_basket_assets()
+                asset_prices = []
+                for asset_addr in basket_assets:
+                    # Find symbol for this address
+                    symbol = None
+                    for sym, info in self.vault.tokens.items():
+                        if info.address.lower() == asset_addr.lower():
+                            symbol = sym
+                            break
+                    
+                    if symbol:
+                        price_usd = self.oracle.price_usd(symbol, asset_addr)
+                        # Convert to 8 decimals for NAV update
+                        price_8dec = int(price_usd * 1e8)
+                        asset_prices.append(price_8dec)
+                        log.info("Asset %s price: $%.2f", symbol, price_usd)
+                    else:
+                        log.warning("Could not find symbol for asset %s", asset_addr)
+                        asset_prices.append(0)
+                
+                if asset_prices and self.exec_mode == "EOA_DIRECT":
+                    self.router.update_nav(self.vault, asset_prices)
+                    log.info("Updated NAV with prices: %s", asset_prices)
+                elif self.exec_mode == "DRY_RUN":
+                    log.info("DRY_RUN: Would update NAV with prices: %s", asset_prices)
+                    
+            except Exception as e:
+                log.warning("Failed to update NAV: %s", e)
+            
+            # Step 3: Get current allocation and calculate rebalancing
+            vault_total_value = self.vault.get_total_value()
+            if vault_total_value == 0:
+                log.info("Vault is empty, skipping rebalancing")
+                return
+                
+            # Get target weights
+            t, target = self._live_target_weights()
+            log.info("Live target @ %s: %s", t, {k: round(v,4) for k,v in target.items()})
+            
+            # Get current weights from vault allocation
+            cur_w = self._vault_current_weights()
+            log.info("Vault total value: $%.2f | Current allocation: %s", vault_total_value/1e6, {k: round(v,4) for k,v in cur_w.items()})
+            
+            # Step 4: Execute rebalancing via vault functions
+            if not self._cooldown_ok():
+                log.info("Cooldown active; skip execution")
+                return
+                
+            self._execute_vault_rebalancing(target, cur_w, vault_total_value)
+            log.info("Vault NAV: $%.2f", vault_total_value/1e6)
+            
+        except Exception as e:
+            _post_alert("VAULT_BOT_ERROR", f"{type(e).__name__}: {e}")
+            log.exception("Vault executor error")
+    
+    def _vault_current_weights(self) -> Dict[str, float]:
+        """Get current weights from vault asset allocations."""
+        weights = {}
+        total_value = 0
+        basket_assets = self.vault.get_basket_assets()
+        
+        for asset_addr in basket_assets:
+            # Find symbol for this address
+            symbol = None
+            for sym, info in self.vault.tokens.items():
+                if info.address.lower() == asset_addr.lower():
+                    symbol = sym
+                    break
+            
+            if symbol:
+                weight_raw, balance_raw, is_active = self.vault.get_asset_allocation(asset_addr)
+                if is_active and balance_raw > 0:
+                    # Convert balance to USD value
+                    price_usd = self.oracle.price_usd(symbol, asset_addr)
+                    token_info = self.vault.tokens[symbol]
+                    balance_tokens = balance_raw / (10 ** token_info.decimals)
+                    usd_value = balance_tokens * price_usd
+                    total_value += usd_value
+                    weights[symbol] = usd_value
+                else:
+                    weights[symbol] = 0.0
+            
+        # Add USDC from vault
+        pending_usdc = self.vault.get_pending_usdc()
+        if pending_usdc > 0:
+            usdc_value = pending_usdc / 1e6  # USDC has 6 decimals
+            total_value += usdc_value
+            weights["USDC"] = usdc_value
+        
+        # Convert to percentages
+        if total_value > 0:
+            for symbol in weights:
+                weights[symbol] = weights[symbol] / total_value
+        
+        return weights
+    
+    def _execute_vault_rebalancing(self, target_w: Dict[str, float], cur_w: Dict[str, float], vault_value_usdc: int):
+        """Execute rebalancing using vault's deployCapital and liquidateAsset functions."""
+        # Calculate required changes in USDC amounts
+        vault_value_usd = vault_value_usdc / 1e6  # Convert from 6-decimal USDC to USD
+        
+        for symbol in target_w:
+            if symbol.upper() == "USDC":
+                continue  # Skip USDC, it's the base currency
+                
+            current_weight = cur_w.get(symbol, 0.0)
+            target_weight = target_w[symbol]
+            weight_diff = target_weight - current_weight
+            
+            # Convert weight difference to USD amount
+            usd_diff = weight_diff * vault_value_usd
+            
+            # Only execute if difference is significant
+            band_pp = self.plan["rebalance"]["band_pp"] / 100.0
+            if abs(weight_diff) < band_pp:
+                continue
+                
+            token_info = self.vault.tokens[symbol]
+            
+            if usd_diff > 0:
+                # Need to buy more of this asset (deploy capital)
+                usdc_amount = int(usd_diff * 1e6)  # Convert to 6-decimal USDC
+                if self.exec_mode == "EOA_DIRECT":
+                    try:
+                        txh = self.router.deploy_capital(self.vault, token_info.address, usdc_amount)
+                        log.info("Deployed $%.2f USDC to buy %s, tx=%s", usd_diff, symbol, txh)
+                    except Exception as e:
+                        log.error("Failed to deploy capital for %s: %s", symbol, e)
+                elif self.exec_mode == "DRY_RUN":
+                    log.info("DRY_RUN: Would deploy $%.2f USDC to buy %s", usd_diff, symbol)
+                    
+            else:
+                # Need to sell some of this asset (liquidate)
+                price_usd = self.oracle.price_usd(symbol, token_info.address)
+                asset_amount = int((abs(usd_diff) / price_usd) * (10 ** token_info.decimals))
+                if self.exec_mode == "EOA_DIRECT":
+                    try:
+                        txh = self.router.liquidate_asset(self.vault, token_info.address, asset_amount)
+                        log.info("Liquidated %.4f %s (≈$%.2f) to USDC, tx=%s", asset_amount/(10**token_info.decimals), symbol, abs(usd_diff), txh)
+                    except Exception as e:
+                        log.error("Failed to liquidate %s: %s", symbol, e)
+                elif self.exec_mode == "DRY_RUN":
+                    log.info("DRY_RUN: Would liquidate %.4f %s (≈$%.2f) to USDC", asset_amount/(10**token_info.decimals), symbol, abs(usd_diff))
+        
+        self.last_rebalance_ts = time.time()
 
-# --------------------------- Multi‑vault runner -----------------------
+# --------------------------- Multi-vault runner -----------------------
 class MultiVaultExecutor:
     def __init__(self, w3: Web3, base_cfg: dict, vaults: List[VaultCfg]):
         self.w3 = w3
@@ -509,9 +769,8 @@ class MultiVaultExecutor:
                 plan=plan,
                 vault_addr=v.vault,
                 allowed_tokens=v.allowed_tokens,
-                chainlink_feeds=self.base['chainlink_feeds'],
+                chainlink_feeds=self.base['oracle_feeds'],
                 router_addr=self.base['router'],
-                quoter_addr=self.base['quoter'],
                 usdc_addr=self.base['usdc'],
                 cp_key=self.base.get('cp_key',''),
                 execution_mode=self.base['mode'],
@@ -539,7 +798,7 @@ class MultiVaultExecutor:
     def run_once(self):
         for ex in self.executors:
             log.info("=== Vault %s ===", ex.vault.vault)
-            ex.run_once()
+            ex.run_vault_cycle()  # Use enhanced MultiAssetVault cycle by default
 
     def run_loop(self, interval_sec: int = 600):
         while True:
@@ -549,12 +808,12 @@ class MultiVaultExecutor:
 # ------------------------------ CLI -----------------------------------
 if __name__ == "__main__":
     import argparse
-    p = argparse.ArgumentParser(description="Executor Bot (multi‑vault; EOA or Dry‑Run)")
+    p = argparse.ArgumentParser(description="Executor Bot (multi-vault; EOA or Dry-Run)")
     p.add_argument('--once', action='store_true', help='Run a single cycle and exit')
     p.add_argument('--interval', type=int, default=int(os.environ.get('EXEC_INTERVAL', '600')), help='Loop interval seconds')
-    p.add_argument('--plan', type=str, default=os.environ.get('PLAN_JSON_PATH', ''), help='Path to plan.json (single‑vault fallback)')
-    p.add_argument('--planner-url', type=str, default=os.environ.get('PLANNER_URL', ''), help='Planner URL (single‑vault fallback)')
-    p.add_argument('--text', type=str, default=os.environ.get('PLAN_TEXT', ''), help='Planner text (single‑vault fallback)')
+    p.add_argument('--plan', type=str, default=os.environ.get('PLAN_JSON_PATH', ''), help='Path to plan.json (single-vault fallback)')
+    p.add_argument('--planner-url', type=str, default=os.environ.get('PLANNER_URL', ''), help='Planner URL (single-vault fallback)')
+    p.add_argument('--text', type=str, default=os.environ.get('PLAN_TEXT', ''), help='Planner text (single-vault fallback)')
     args = p.parse_args()
 
     # Web3
@@ -563,23 +822,23 @@ if __name__ == "__main__":
 
     # Base config
     mode = os.environ.get('EXECUTION_MODE', 'DRY_RUN').upper()
-    pk = os.environ.get('PRIVATE_KEY') if mode == 'EOA_DIRECT' else None
+    pk = os.environ.get('PRIVATE_KEY')
     base_cfg = {
         'mode': mode,
         'private_key': pk,
-        'router': os.environ.get('UNIV3_ROUTER'),
-        'quoter': os.environ.get('UNIV3_QUOTER'),
+        'router': os.environ.get('ORDER_ROUTER'),
         'usdc': os.environ.get('USDC'),
-        'chainlink_feeds': _json_env('CHAINLINK_FEEDS'),
+        'oracle_feeds': _json_env('ORACLE_FEEDS'),
         'cp_key': os.environ.get('CRYPTOPANIC_KEY',''),
         'cooldown_hours':  int(os.environ.get('DEFAULT_COOLDOWN_HOURS','6')),
     }
-    assert base_cfg['router'] and base_cfg['quoter'] and base_cfg['usdc'], 'UNIV3_ROUTER/UNIV3_QUOTER/USDC required'
+    assert base_cfg['router'] and base_cfg['usdc'], 'ORDER_ROUTER/USDC required'
     if mode == 'EOA_DIRECT' and not pk:
         raise SystemExit('EOA_DIRECT requires PRIVATE_KEY in env')
 
-    # Multi‑vault config via VAULTS_JSON (preferred)
+    # Multi-vault config via VAULTS_JSON (preferred)
     vlist_env = os.environ.get('VAULTS_JSON','')
+    print("VAULTS_JSON:", vlist_env)
     vaults: List[VaultCfg] = []
     if vlist_env:
         raw = json.loads(vlist_env)
@@ -593,14 +852,14 @@ if __name__ == "__main__":
                 cooldown_hours=item.get('cooldown_hours')
             ))
     else:
-        # Single‑vault fallback from legacy envs
+        # Single-vault fallback from legacy envs
         vaddr = os.environ.get('VAULT_ADDRESS') or '<vault>'
         allowed_tokens = _json_env('VAULT_ALLOWED_TOKENS') or {
             "USDC": os.environ.get('USDC','<usdc>'),
-            "ETH": os.environ.get('WETH','<weth>'),
-            "BTC": os.environ.get('WBTC','<wbtc>'),
-            "SOL": os.environ.get('WSOL','<wsol>')
+            "WAVAX": os.environ.get('WAVAX','<weth>'),
+            "USDT": os.environ.get('USDT','<usdt>'),
         }
+        print("Allowed tokens:", allowed_tokens)
         # Load plan if provided
         plan_path = args.plan if (args.plan and os.path.exists(args.plan)) else None
         planner_url = args.planner_url

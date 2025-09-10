@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
+import "@openzeppelin/contracts/access/Ownable.sol";
+
 // Chainlink Aggregator Interface
 interface AggregatorV3Interface {
     function decimals() external view returns (uint8);
@@ -26,22 +28,61 @@ interface AggregatorV3Interface {
     );
 }
 
-contract OracleAggregator {
+contract OracleAggregator is Ownable {
     
-    AggregatorV3Interface internal priceFeed;
+    mapping(address => address) public priceFeeds;
+    mapping(address => uint256) public manualPrices;
+    mapping(address => bool) public useManualPrice;
+    
+    event PriceFeedSet(address indexed asset, address indexed priceFeed);
+    event ManualPriceSet(address indexed asset, uint256 price);
     
     /**
      * Network: Avalanche Fuji Testnet
-     * Aggregator: AVAX/USD
-     * Address: 0x5498BB86BC934c8D34FDA08E81D444153d0D06aD
-     * Source: https://docs.chain.link/data-feeds/price-feeds/addresses
+     * Default Chainlink Price Feeds
      */
-    constructor() {
-        priceFeed = AggregatorV3Interface(0x5498BB86BC934c8D34FDA08E81D444153d0D06aD);
+    constructor() Ownable(msg.sender) {
+        // AVAX/USD on Fuji
+        priceFeeds[0xd00ae08403B9bbb9124bB305C09058E32C39A48c] = 0x5498BB86BC934c8D34FDA08E81D444153d0D06aD;
+        
+        // Set manual prices for stablecoins (since Chainlink feeds might not be available on testnet)
+        manualPrices[0xB6076C93701D6a07266c31066B298AeC6dd65c2d] = 1e18; // USDC = $1
+        useManualPrice[0xB6076C93701D6a07266c31066B298AeC6dd65c2d] = true;
+        
+        manualPrices[0xAb231A5744C8E6c45481754928cCfFFFD4aa0732] = 1e18; // USDT = $1  
+        useManualPrice[0xAb231A5744C8E6c45481754928cCfFFFD4aa0732] = true;
     }
 
-    // _asset parameter not used for now, as this oracle only provides AVAX/USD price
-    function getPrice(address _asset) public view returns (uint256) {
+    // Admin functions
+    function setPriceFeed(address asset, address priceFeed) external onlyOwner {
+        priceFeeds[asset] = priceFeed;
+        useManualPrice[asset] = false;
+        emit PriceFeedSet(asset, priceFeed);
+    }
+    
+    function setManualPrice(address asset, uint256 price) external onlyOwner {
+        manualPrices[asset] = price;
+        useManualPrice[asset] = true;
+        emit ManualPriceSet(asset, price);
+    }
+    
+    function enableRealTimePrice(address asset) external onlyOwner {
+        require(priceFeeds[asset] != address(0), "No Chainlink feed configured");
+        useManualPrice[asset] = false;
+        emit PriceFeedSet(asset, priceFeeds[asset]);
+    }
+    
+    // Main price function - supports multiple assets
+    function getPrice(address asset) public view returns (uint256) {
+        if (useManualPrice[asset]) {
+            require(manualPrices[asset] > 0, "Manual price not set");
+            return manualPrices[asset];
+        }
+        
+        address feed = priceFeeds[asset];
+        require(feed != address(0), "Price feed not configured");
+        
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(feed);
         (
             /* uint80 roundID */,
             int256 price,
@@ -50,55 +91,39 @@ contract OracleAggregator {
             /* uint80 answeredInRound */
         ) = priceFeed.latestRoundData();
         
-        return uint256(price);
+        require(price > 0, "Invalid price from feed");
+        
+        // Scale to 18 decimals
+        uint8 feedDecimals = priceFeed.decimals();
+        if (feedDecimals < 18) {
+            return uint256(price) * 10**(18 - feedDecimals);
+        } else if (feedDecimals > 18) {
+            return uint256(price) / 10**(feedDecimals - 18);
+        } else {
+            return uint256(price);
+        }
     }
     
-    function getLatestRoundData() public view returns (
+    // Chainlink compatibility functions
+    function latestRoundData() external view returns (
         uint80 roundId,
-        int256 price,
+        int256 answer,
         uint256 startedAt,
         uint256 updatedAt,
         uint80 answeredInRound
     ) {
-        return priceFeed.latestRoundData();
-    }
-
-    function getDecimals() public view returns (uint8) {
-        return priceFeed.decimals();
-    }
-
-    function getDescription() public view returns (string memory) {
-        return priceFeed.description();
-    }
-
-    function getPriceIn18Decimals() public view returns (uint256) {
-        uint256 price = getPrice(address(0));
-        require(price > 0, "Invalid price");
-        
-        uint8 decimals = getDecimals();
-        
-        // Scale from 8 decimals to 18 decimals
-        if (decimals < 18) {
-            return uint256(price) * 10**(18 - decimals);
-        } else if (decimals > 18) {
-            return uint256(price) / 10**(decimals - 18);
-        } else {
-            return uint256(price);
+        // Default to WAVAX feed for compatibility
+        address defaultAsset = 0xd00ae08403B9bbb9124bB305C09058E32C39A48c;
+        if (useManualPrice[defaultAsset]) {
+            return (1, int256(manualPrices[defaultAsset]), block.timestamp, block.timestamp, 1);
         }
+        
+        address feed = priceFeeds[defaultAsset];
+        require(feed != address(0), "Default price feed not configured");
+        return AggregatorV3Interface(feed).latestRoundData();
     }
 
-    function getPriceWithDecimals(uint8 targetDecimals) public view returns (uint256) {
-        uint256 price = getPrice(address(0));
-        require(price > 0, "Invalid price");
-        
-        uint8 sourceDecimals = getDecimals();
-        
-        if (sourceDecimals < targetDecimals) {
-            return uint256(price) * 10**(targetDecimals - sourceDecimals);
-        } else if (sourceDecimals > targetDecimals) {
-            return uint256(price) / 10**(sourceDecimals - targetDecimals);
-        } else {
-            return uint256(price);
-        }
+    function getDecimals() external pure returns (uint8) {
+        return 18; // All prices normalized to 18 decimals
     }
 }

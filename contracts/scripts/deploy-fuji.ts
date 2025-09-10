@@ -15,20 +15,13 @@ async function main() {
   console.log("Deploying contracts with account:", deployer.address);
   console.log("Account balance:", ethers.formatEther(await ethers.provider.getBalance(deployer.address)), "AVAX");
   
-  // Deploy OracleAggregator (mock for now)
-  console.log("\n1. Deploying MockOracleAggregator...");
-  const MockOracleAggregatorFactory = await ethers.getContractFactory("MockOracleAggregator");
-  const oracleAggregator = await MockOracleAggregatorFactory.deploy();
+  // Deploy OracleAggregator (real one with Chainlink support)
+  console.log("\n1. Deploying OracleAggregator...");
+  const OracleAggregatorFactory = await ethers.getContractFactory("OracleAggregator");
+  const oracleAggregator = await OracleAggregatorFactory.deploy();
   await oracleAggregator.waitForDeployment();
   const oracleAddress = await oracleAggregator.getAddress();
-  console.log("MockOracleAggregator deployed to:", oracleAddress);
-  
-  // Set prices for assets (in 1e18 scale)
-  console.log("Setting asset prices...");
-  await oracleAggregator.setPrice(FUJI_ADDRESSES.USDC, ethers.parseUnits("1", 18)); // $1.00
-  await oracleAggregator.setPrice(FUJI_ADDRESSES.USDT, ethers.parseUnits("1", 18)); // $1.00
-  await oracleAggregator.setPrice(FUJI_ADDRESSES.WAVAX, ethers.parseUnits("35", 18)); // ~$35.00
-  console.log("✓ Asset prices set");
+  console.log("OracleAggregator deployed to:", oracleAddress);
   
   // Deploy OrderRouter
   console.log("\n2. Deploying OrderRouter...");
@@ -40,8 +33,8 @@ async function main() {
   
   // Note: You'll need to find the correct binSteps from Trader Joe V2 for these pairs
   await orderRouter.setPairBinStep(FUJI_ADDRESSES.USDC, FUJI_ADDRESSES.USDT, 1);
-  await orderRouter.setPairBinStep(FUJI_ADDRESSES.USDC, FUJI_ADDRESSES.WAVAX, 20);
-  await orderRouter.setPairBinStep(FUJI_ADDRESSES.USDT, FUJI_ADDRESSES.WAVAX, 15);
+  await orderRouter.setPairBinStep(FUJI_ADDRESSES.USDC, FUJI_ADDRESSES.WAVAX, 10);
+  await orderRouter.setPairBinStep(FUJI_ADDRESSES.USDT, FUJI_ADDRESSES.WAVAX, 25);
   console.log("✓ Trading pairs configured (USDC-USDT, USDC-WAVAX, USDT-WAVAX)");
   
   // Deploy BasketFactory
@@ -63,7 +56,7 @@ async function main() {
   console.log("Deployer:", deployer.address);
   console.log("");
   console.log("Deployed Contracts:");
-  console.log("├── MockOracleAggregator:", oracleAddress);
+  console.log("├── OracleAggregator:", oracleAddress);
   console.log("├── OrderRouter:", orderRouterAddress);
   console.log("└── BasketFactory:", basketFactoryAddress);
   console.log("");
@@ -93,7 +86,7 @@ async function main() {
     timestamp: new Date().toISOString(),
     deployer: deployer.address,
     contracts: {
-      MockOracleAggregator: oracleAddress,
+      OracleAggregator: oracleAddress,
       OrderRouter: orderRouterAddress,
       BasketFactory: basketFactoryAddress
     },

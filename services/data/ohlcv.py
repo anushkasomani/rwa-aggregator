@@ -2,7 +2,7 @@ import time, requests, pandas as pd
 from datetime import datetime, timedelta, timezone
 import ccxt
 
-COINGECKO_IDS = {"BTC":"bitcoin","ETH":"ethereum","SOL":"solana"}
+COINGECKO_IDS = {"BTC":"bitcoin","ETH":"ethereum","SOL":"solana","WAVAX":"avalanche-2","AVAX":"avalanche-2","USDT":"tether"}
 
 def ccxt_ohlcv(symbol_pair="BTC/USDT", exchange_id="binance", timeframe="1d", since_days=540):
     ex = getattr(ccxt, exchange_id)()

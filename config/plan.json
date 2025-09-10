@@ -1,37 +1,34 @@
 {
-  "name": "Conservative Strategy",
+  "name": "Simple WAVAX Strategy", 
   "regime": "auto",
   "direction_bias": "neutral",
-  "universe": ["BTC", "ETH"],
+  "universe": ["WAVAX", "USDC"],
   "custom_rules": [
-    "CLOSE>SMA(30)",
-    "SENTIMENT>=GOOD"
   ],
   "gates": {},
   "weighting": {
     "mode": "composite",
     "coeffs": {
-      "trend": 0.35,
-      "momentum": 0.35,
-      "volume": 0.15,
-      "sentiment": 0.15
-    },
-    "tilt_sentiment_pct": 0.10
+      "trend": 1.0,
+      "momentum": 0.0,
+      "volume": 0.0, 
+      "sentiment": 0.0
+    }
   },
   "rebalance": {
-    "cadence": "weekly",
+    "cadence": "daily",
     "band_pp": 5.0,
-    "turnover_max": 0.15
+    "turnover_max": 0.5
   },
   "risk": {
-    "max_weight": 0.40,
-    "hard_cap": 0.50,
-    "slippage_max_bps": 80,
-    "order_max_usd": 2000,
-    "cooldown_hours": 6
+    "max_weight": 0.70,
+    "hard_cap": 0.70,
+    "slippage_max_bps": 100,
+    "order_max_usd": 1000,
+    "cooldown_hours": 1
   },
   "execution": {
-    "chunk_usd": 2000,
+    "chunk_usd": 1000,
     "use_yield": false
   },
   "sentiment_cfg": {
