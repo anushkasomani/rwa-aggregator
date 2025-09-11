@@ -1,0 +1,44 @@
+/* Strategy components styles */
+.assets-scroll { -ms-overflow-style: none; }
+.asset-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: #fff;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 70%, transparent), color-mix(in srgb, var(--accent-secondary) 55%, transparent));
+  border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+  box-shadow: 0 2px 16px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+/* Subtle variety across badges */
+.assets-scroll .asset-badge:nth-child(3n+1) {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary) 65%, transparent), color-mix(in srgb, var(--accent) 45%, transparent));
+}
+.assets-scroll .asset-badge:nth-child(3n+2) {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 60%, transparent), color-mix(in srgb, var(--foreground) 30%, transparent));
+}
+
+.crux-highlight {
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, transparent), transparent);
+  padding: 10px 12px;
+}
+.crux-icon {
+  display: inline-grid;
+  place-items: center;
+  height: 28px;
+  width: 28px;
+  border-radius: 10px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.crux-text { color: var(--foreground); opacity: .92; font-size: 0.95rem; line-height: 1.35; }
+
+.strategy-card-footer { border-top: 1px dashed color-mix(in srgb, var(--foreground) 12%, transparent); padding-top: 8px; }
