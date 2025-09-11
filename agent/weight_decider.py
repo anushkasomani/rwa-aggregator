@@ -626,7 +626,7 @@ def _derive_features(ohlcv: Dict[str,pd.DataFrame], feats: List[str]) -> Dict[st
 
         for n in atr_ns: x[f"ATR_{n}"] = _atr(high, low, close, n)
 
-        # ADX/DI±/ADX_RISING
+        # ADX/DI卤/ADX_RISING
         adx_cache: Dict[int, Tuple[pd.Series,pd.Series,pd.Series]] = {}
         for n in adx_ns:
             adx, dpl, dmn = _adx_di(high, low, close, n)
@@ -746,6 +746,42 @@ def _features_from_gates(plan: Dict) -> List[str]:
         cmf = re.findall(r"CMF\((\d+)\)", e)
         for n in cmf: feats.add(f"CMF_{n}")
 
+    # Include features required by hard rules (custom_rules) as well
+    for hr in (plan.get("hard_rules") or []):
+        e = str(hr.get("expr","")).upper()
+        for n in _GATE_SMA.findall(e): feats.add(f"SMA_{n}")
+        for n in _GATE_EMA.findall(e): feats.add(f"EMA_{n}")
+        for n in _GATE_SMA_VOL.findall(e): feats.add(f"VOL_SMA_{n}")
+        if "RSI(14)" in e: feats.add("RSI_14")
+        if "RET_60D" in e: feats.add("RET_60D")
+        if "SENTIMENT" in e: feats.add("SENTIMENT")
+        for n in _GATE_ATR.findall(e): feats.add(f"ATR_{n}")
+        for n in _GATE_ADX.findall(e): feats.add(f"ADX_{n}")
+        for n in _GATE_DI_PLUS.findall(e): feats.add(f"DI_PLUS_{n}")
+        for n in _GATE_DI_MINUS.findall(e): feats.add(f"DI_MINUS_{n}")
+        for n in _GATE_ADX_RISING.findall(e): feats.add(f"ADX_RISING_{n}")
+        for n in _GATE_DONCH_HI.findall(e): feats.add(f"DONCHIAN_HI_{n}")
+        for n in _GATE_DONCH_LO.findall(e): feats.add(f"DONCHIAN_LO_{n}")
+        for n,k in _GATE_BB_UP.findall(e): feats |= {f"BB_UP_{n}_{k}", f"BB_MID_{n}"}
+        for n,k in _GATE_BB_DN.findall(e): feats |= {f"BB_DN_{n}_{k}", f"BB_MID_{n}"}
+        for n,k in _GATE_BB_BW.findall(e): feats |= {f"BB_BW_PCT_{n}_{k}", f"BB_MID_{n}"}
+        for n,k in _GATE_KC_UP.findall(e): feats |= {f"KC_UP_{n}_{k}", f"KC_MID_{n}"}
+        for n,k in _GATE_KC_DN.findall(e): feats |= {f"KC_DN_{n}_{k}", f"KC_MID_{n}"}
+        for n in _GATE_KC_MID.findall(e): feats.add(f"KC_MID_{n}")
+        for f,s in _GATE_MACD_LINE.findall(e): feats.add(f"MACD_LINE_{f}_{s}")
+        for f,s,sg in _GATE_MACD_SIGNAL.findall(e): feats.add(f"MACD_SIGNAL_{f}_{s}_{sg}")
+        for f,s,sg in _GATE_MACD_HIST.findall(e): feats.add(f"MACD_HIST_{f}_{s}_{sg}")
+        for n in _GATE_STOCH_RSI_K.findall(e): feats.add(f"STOCH_RSI_K_{n}")
+        for n in _GATE_STOCH_RSI_D.findall(e): feats.add(f"STOCH_RSI_D_{n}")
+        if "VWAP(" in e:
+            for n in _GATE_VWAP_N.findall(e): feats.add(f"VWAP_{n}")
+        if "VWAP" in e: feats.add("VWAP")
+        if "OBV" in e: feats.add("OBV")
+        mfi = re.findall(r"MFI\((\d+)\)", e)
+        for n in mfi: feats.add(f"MFI_{n}")
+        cmf = re.findall(r"CMF\((\d+)\)", e)
+        for n in cmf: feats.add(f"CMF_{n}")
+
     # ensure composite helpers
     feats |= {"SMA_30","VOL_SMA_30","RET_60D","RSI_14"}
     return sorted(list(feats))
@@ -814,13 +850,15 @@ def _combine_gates_weighted(plan: Dict,
     any_of = gates.get("any_of") or []
     patt_reqs = gates.get("patterns") or []
     
-    # Default gate weights - can be overridden in plan
-    gate_weights = (plan.get("gate_weights") or {
-        "trend_gates": 0.4,      # Most important: Market structure
-        "momentum_gates": 0.3,   # Important: Entry timing  
-        "volume_gates": 0.2,     # Moderate: Confirmation
-        "sentiment_gates": 0.1   # Minor: Sentiment overlay
-    })
+    # Default gate weights - can be overridden in plan (either top-level "gate_weights" or "eligibility.gate_weights")
+    gate_weights = (plan.get("eligibility", {}).get("gate_weights")
+                    or plan.get("gate_weights")
+                    or {
+                        "trend_gates": 0.4,      # Market structure
+                        "momentum_gates": 0.3,   # Entry timing  
+                        "volume_gates": 0.2,     # Confirmation
+                        "sentiment_gates": 0.1   # Sentiment overlay
+                    })
     
     # Classify gates by type based on expression content
     def _classify_gate(expr: str) -> str:
@@ -854,7 +892,6 @@ def _combine_gates_weighted(plan: Dict,
                 expr = g["expr"]
                 score = _evaluate_gate_weighted(expr, df, sent_by_asset.get(a))
                 any_scores.append(score)
-            # Add best any_of score to momentum (most common any_of type)
             if any_scores:
                 gate_scores["momentum_gates"].append(max(any_scores))
         
@@ -871,7 +908,7 @@ def _combine_gates_weighted(plan: Dict,
         for gate_type, scores in gate_scores.items():
             if scores:
                 avg_score = sum(scores) / len(scores)
-                weight = gate_weights.get(gate_type, 0.0)
+                weight = float(gate_weights.get(gate_type, 0.0))
                 total_score += weight * avg_score
                 total_weight += weight
         
@@ -951,7 +988,7 @@ def _normalize_plan(raw: Dict) -> Tuple[Dict, List[str]]:
     """
     Accepts richer JSON (universe_list, custom_rules, gates.trend.ema_short/ema_long, adx_min,
     gates.range.bb_bw_pct_max, gates.breakout.{donchian_n,min_vol_mult,adx_rising}, weighting.mode,
-    tilt_sentiment_pct, patterns, etc.) and returns an engine-compatible plan + warnings.
+    tilt_sentiment_pct, patterns, eligibility config, etc.) and returns an engine-compatible plan + warnings.
     """
     global GOOD_THRESH, BAD_THRESH
     warn=[]
@@ -966,17 +1003,19 @@ def _normalize_plan(raw: Dict) -> Tuple[Dict, List[str]]:
     all_of: List[Dict] = []
     any_of: List[Dict] = []
 
-    # custom_rules like "close > sma(close, 20)"
+    # ---------- HARD RULES (from custom_rules) ----------
+    # Move custom_rules into plan["hard_rules"] as canonical expressions
+    hard_rules: List[Dict] = []
     for r in plan.get("custom_rules") or []:
         rr = str(r).upper()
-        # Handle sma(close, n) -> sma(n)
+        # Normalize SMA/EMA on CLOSE to SMA(n)/EMA(n)
         rr = re.sub(r"SMA\(CLOSE\s*,\s*", "SMA(", rr)
-        # Handle ema(close, n) -> ema(n)  
         rr = re.sub(r"EMA\(CLOSE\s*,\s*", "EMA(", rr)
-        # Replace close with CLOSE for consistency
         rr = rr.replace("CLOSE", "CLOSE")
-        all_of.append({"expr": rr})
+        hard_rules.append({"expr": rr})
+    plan["hard_rules"] = hard_rules  # stored for later enforcement and feature building
 
+    # ---------- SOFT GATES ----------
     # trend ema crossover
     trend = gates.get("trend") or {}
     es, el = trend.get("ema_short"), trend.get("ema_long")
@@ -1021,7 +1060,7 @@ def _normalize_plan(raw: Dict) -> Tuple[Dict, List[str]]:
     sent_cfg = plan.get("sentiment_cfg") or {}
     good_thr = float(sent_cfg.get("good_threshold", GOOD_THRESH))
     bad_thr  = float(sent_cfg.get("bad_threshold", BAD_THRESH))
-    # If gates.sentiment is numeric or word, treat as hard gate; if "AUTO" or absent, skip hard gate
+    # If gates.sentiment is numeric or word, treat as additional soft gate; if "AUTO" or absent, skip hard gate
     if isinstance(gates.get("sentiment", None), (int, float, str)):
         if isinstance(gates["sentiment"], (int,float)):
             all_of.append({"expr": f"SENTIMENT >= {float(gates['sentiment'])}"})
@@ -1064,6 +1103,18 @@ def _normalize_plan(raw: Dict) -> Tuple[Dict, List[str]]:
             coeffs[new] = coeffs.pop(old)
     weighting["coeffs"] = coeffs
 
+    # eligibility config defaults (configurable)
+    elig = plan.setdefault("eligibility", {})
+    elig.setdefault("weighted", plan.get("use_weighted_eligibility", True))
+    elig.setdefault("hard_from_custom_rules", True)  # treat custom_rules as hard requirement
+    elig.setdefault("zero_if_hard_fail", True)       # zero-out if hard rules fail
+    elig.setdefault("floor_if_hard_ok", 0.10)        # minimum multiplier if hard rules pass but soft gates weak
+    # tier thresholds & multipliers (from high to low)
+    elig.setdefault("tiers", [0.8, 0.6, 0.4, 0.2])
+    elig.setdefault("tier_multipliers", [1.0, 0.8, 0.5, 0.2, 0.0])  # last is default if below lowest tier
+    # whether in binary mode we soften non-hard gates (only require hard rules)
+    elig.setdefault("soften_non_hard_gates_in_binary", True)
+
     # expose thresholds
     GOOD_THRESH = good_thr
     BAD_THRESH  = bad_thr
@@ -1088,17 +1139,18 @@ def compute_weights_now(
     """
     Returns a dict with fields:
       - as_of: ISO timestamp (UTC)
-      - eligibility: {asset: bool}
+      - eligibility: {asset: bool} OR {asset: float} (weighted score)
       - scores: {asset: float}
       - target_weights: {asset: float}
       - explain: {asset: [bullets]}
       - trade_plan: {orders:[...]}  # only if current_weights & portfolio_value_usd provided
       - features_used: [str]
       - warnings: [str]
+      - weighted_eligibility_scores (if weighted): {asset: float}
 
     Data loading:
       - If `ohlcv` / `sentiment` provided, they are used as-is.
-      - Else: fetch OHLCV (ccxt primary → CoinGecko fallback) and CryptoPanic sentiment (if cp_key).
+      - Else: fetch OHLCV (ccxt primary 鈫?CoinGecko fallback) and CryptoPanic sentiment (if cp_key).
       - Pattern detection is external; pass `pattern_cards_by_asset`.
     """
     plan, warnings = _normalize_plan(plan)
@@ -1131,41 +1183,72 @@ def compute_weights_now(
     # Derived features
     feat_tables = _derive_features(ohlcv, feats_needed)
 
-    # Check if weighted eligibility is enabled
-    use_weighted_eligibility = plan.get("use_weighted_eligibility", True)
-    
+    # Compute "as_of" = latest common bar across assets
+    as_of = _latest_common_index(ohlcv)
+    if pd.isna(as_of):
+        raise RuntimeError("No overlapping OHLCV data across assets")
+
+    # -----------------------------
+    # Hard rules evaluation (custom_rules)
+    # -----------------------------
+    elig_cfg = plan.get("eligibility", {}) or {}
+    hard_from_custom = bool(elig_cfg.get("hard_from_custom_rules", True))
+    zero_if_hard_fail = bool(elig_cfg.get("zero_if_hard_fail", True))
+    floor_if_hard_ok = float(elig_cfg.get("floor_if_hard_ok", 0.10))
+
+    hard_ok = {a: True for a in assets}
+    if hard_from_custom and plan.get("hard_rules"):
+        for a, df in feat_tables.items():
+            ok = True
+            for hr in plan["hard_rules"]:
+                try:
+                    series = _evaluate_gate(hr["expr"], df, (sentiment or {}).get(a))
+                    passed = bool(series.loc[:as_of].iloc[-1]) if len(series.loc[:as_of]) else False
+                except Exception:
+                    passed = False
+                ok = ok and passed
+            hard_ok[a] = ok
+
+    # -----------------------------
+    # Eligibility (weighted vs binary)
+    # -----------------------------
+    use_weighted_eligibility = bool(elig_cfg.get("weighted", plan.get("use_weighted_eligibility", True)))
+    scores_all = _composite_scores(plan, feat_tables, sentiment, pattern_cards_by_asset)
+
+    # Prepare multipliers config (for weighted mode)
+    tier_thresholds = list(elig_cfg.get("tiers", [0.8, 0.6, 0.4, 0.2]))
+    tier_multipliers = list(elig_cfg.get("tier_multipliers", [1.0, 0.8, 0.5, 0.2, 0.0]))
+    # Sanity: ensure last multiplier exists
+    if len(tier_multipliers) < len(tier_thresholds) + 1:
+        # pad with zeros
+        tier_multipliers = tier_multipliers + [0.0] * (len(tier_thresholds) + 1 - len(tier_multipliers))
+
     if use_weighted_eligibility:
-        # Weighted eligibility system
         elig_scores = _combine_gates_weighted(plan, feat_tables, sentiment, pattern_cards_by_asset)
-        scores_all = _composite_scores(plan, feat_tables, sentiment, pattern_cards_by_asset)
-        
-        # "now" = latest common bar across assets
-        as_of = _latest_common_index(ohlcv)
-        if pd.isna(as_of):
-            raise RuntimeError("No overlapping OHLCV data across assets")
-        
-        # Apply weighted eligibility scores to base scores
+
+        # Apply weighted eligibility scores to base scores with hard-rule logic
         sc_now = {}
         for a in assets:
             base_score = float(scores_all[a].get(as_of, 0.0))
-            eligibility = elig_scores.get(a, 0.0)
-            
-            # Apply eligibility tiers
-            if eligibility >= 0.8:
-                multiplier = 1.0      # Full allocation
-            elif eligibility >= 0.6:  
-                multiplier = 0.8      # 80% allocation
-            elif eligibility >= 0.4:
-                multiplier = 0.5      # 50% allocation  
-            elif eligibility >= 0.2:
-                multiplier = 0.2      # 20% allocation
+            eligibility = float(elig_scores.get(a, 0.0))
+
+            if hard_from_custom and not hard_ok[a]:
+                multiplier = 0.0 if zero_if_hard_fail else tier_multipliers[-1]
             else:
-                multiplier = 0.0      # No allocation
-                
+                # pick multiplier from tiers
+                multiplier = tier_multipliers[-1]  # default lowest
+                for th, mult in zip(tier_thresholds, tier_multipliers):
+                    if eligibility >= th:
+                        multiplier = mult
+                        break
+                # enforce floor if hard rules passed
+                if hard_from_custom and hard_ok[a]:
+                    multiplier = max(multiplier, floor_if_hard_ok)
+
             final_score = base_score * multiplier
             if final_score > 0:
                 sc_now[a] = final_score
-        
+
         if not sc_now:
             target = {a: 0.0 for a in assets}
         else:
@@ -1173,18 +1256,20 @@ def compute_weights_now(
             hard_cap = float(((plan.get("rebalance") or {}).get("hard_cap", 0.50)))
             strict_caps = bool(((plan.get("risk") or {}).get("strict_caps", True)))
             target = _weights_from_scores(sc_now, max_w=max_w, hard_cap=hard_cap, strict_caps=strict_caps)
+
+        eligibility_output = elig_scores  # keep numeric for debug/consumers
+
     else:
-        # Original binary eligibility system  
-        elig = _combine_gates(plan, feat_tables, sentiment, pattern_cards_by_asset)
-        scores_all = _composite_scores(plan, feat_tables, sentiment, pattern_cards_by_asset)
+        # Binary eligibility system
+        soften_binary = bool(elig_cfg.get("soffen_non_hard_gates_in_binary", elig_cfg.get("soften_non_hard_gates_in_binary", True)))
+        if soften_binary:
+            # Only require hard rules; soft gates do not block eligibility
+            eligible_assets = [a for a in assets if (not hard_from_custom) or hard_ok[a]]
+        else:
+            # Original: require all soft gates too
+            elig = _combine_gates(plan, feat_tables, sentiment, pattern_cards_by_asset)
+            eligible_assets = [a for a in assets if bool(elig[a].get(as_of, False)) and ((not hard_from_custom) or hard_ok[a])]
 
-        # "now" = latest common bar across assets
-        as_of = _latest_common_index(ohlcv)
-        if pd.isna(as_of):
-            raise RuntimeError("No overlapping OHLCV data across assets")
-
-        # Eligible set @ as_of
-        eligible_assets = [a for a in assets if bool(elig[a].get(as_of, False))]
         if not eligible_assets:
             target = {a: 0.0 for a in assets}
         else:
@@ -1194,11 +1279,16 @@ def compute_weights_now(
             strict_caps = bool(((plan.get("risk") or {}).get("strict_caps", True)))
             target = _weights_from_scores(sc_now, max_w=max_w, hard_cap=hard_cap, strict_caps=strict_caps)
 
+        # In binary mode, expose boolean eligibility (hard rule only if softened)
+        if soften_binary:
+            eligibility_output = {a: ((not hard_from_custom) or bool(hard_ok[a])) for a in assets}
+        else:
+            eligibility_output = {a: bool(elig[a].get(as_of, False)) for a in assets}  # type: ignore[name-defined]
+
     # Apply sentiment tilt for both systems
     tilt = float((plan.get("weighting") or {}).get("tilt_sentiment_pct", 0.0) or 0.0)
     if tilt > 0:
         sent_now = {}
-        # Get assets that have non-zero target weights
         eligible_for_tilt = [a for a in assets if target.get(a, 0.0) > 0]
         for a in eligible_for_tilt:
             s = sentiment.get(a)
@@ -1229,7 +1319,7 @@ def compute_weights_now(
         if "VOL_SMA_30" in df.columns and len(df["VOL_SMA_30"].dropna()):
             vs = df["VOL_SMA_30"].iloc[-1]; v = df["volume"].iloc[-1]
             if pd.notna(v) and pd.notna(vs) and vs>0:
-                bullets.append(f"vol {v/vs:.2f}× avg")
+                bullets.append(f"vol {v/vs:.2f}脳 avg")
         # ADX
         for col in [c for c in df.columns if c.startswith("ADX_")]:
             val = df[col].iloc[-1]
@@ -1258,14 +1348,11 @@ def compute_weights_now(
         if pattern_cards_by_asset and pattern_cards_by_asset.get(a):
             ps = _pattern_score_from_cards(pattern_cards_by_asset[a])
             bullets.append(f"pattern_score {ps:.2f}")
+        # Hard rule status
+        if plan.get("hard_rules"):
+            bullets.append(f"hard_rules_pass={'Y' if hard_ok.get(a, True) else 'N'}")
         explain[a]=bullets
 
-    # Prepare output based on eligibility system used
-    if use_weighted_eligibility:
-        eligibility_output = elig_scores
-    else:
-        eligibility_output = {a: bool(elig[a].get(as_of, False)) for a in assets}
-    
     out = {
         "as_of": as_of.isoformat(),
         "eligibility": eligibility_output,
@@ -1278,7 +1365,10 @@ def compute_weights_now(
     
     # Add weighted eligibility debug info if enabled
     if use_weighted_eligibility:
-        out["weighted_eligibility_scores"] = elig_scores
+        out["weighted_eligibility_scores"] = {a: float(v) for a,v in (eligibility_output or {}).items()}  # type: ignore[arg-type]
+    # Add hard rules pass map for transparency
+    if plan.get("hard_rules"):
+        out["hard_rules_pass"] = hard_ok
 
     # Optional: build trade plan
     if current_weights is not None and portfolio_value_usd is not None:

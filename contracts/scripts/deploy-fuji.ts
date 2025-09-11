@@ -1,4 +1,6 @@
 import { ethers } from "hardhat";
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Fuji Testnet Addresses
 const FUJI_ADDRESSES = {
@@ -80,7 +82,7 @@ async function main() {
   console.log(`  "UWB" // symbol`);
   console.log(`)`);
   
-  // Save deployment info to file
+  // Save deployment info to deployments directory
   const deploymentInfo = {
     network: "fuji",
     timestamp: new Date().toISOString(),
@@ -93,7 +95,20 @@ async function main() {
     external: FUJI_ADDRESSES
   };
   
-  console.log("\n💾 Deployment info saved to deployment-info.json");
+  // Create deployments directory structure
+  const deploymentsDir = path.join(__dirname, '..', 'deployments', 'fuji');
+  if (!fs.existsSync(path.join(__dirname, '..', 'deployments'))) {
+    fs.mkdirSync(path.join(__dirname, '..', 'deployments'));
+  }
+  if (!fs.existsSync(deploymentsDir)) {
+    fs.mkdirSync(deploymentsDir);
+  }
+  
+  // Save to deployed-contracts.json
+  const deploymentPath = path.join(deploymentsDir, 'deployed-contracts.json');
+  fs.writeFileSync(deploymentPath, JSON.stringify(deploymentInfo, null, 2));
+  
+  console.log(`\n💾 Deployment addresses saved to: ${deploymentPath}`);
   console.log(JSON.stringify(deploymentInfo, null, 2));
 }
 

@@ -73,7 +73,7 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
 
     // Configuration
     uint256 public maxQueueSize = 100;
-    uint256 public minDepositAmount = 10 * 1e6;    // 10 USDC minimum
+    uint256 public minDepositAmount = 10000;    // 10 USDC minimum
     uint256 public minRedemptionShares = 1e15;     // 0.001 shares minimum
 
     // ================================
@@ -138,7 +138,6 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
     error NoRedemptionsToProcess();
     error InsufficientLiquidity();
     error AssetNotInBasket();
-    error AlreadyInitialized();
     error NotInitialized();
     error Unauthorized();
     error StaleNAV();
@@ -167,56 +166,40 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
         string memory _name,
         string memory _symbol,
         address _orderRouter,
-        address _oracleAggregator
+        address _oracleAggregator,
+        address[] memory _assets,
+        uint256[] memory _weights
     ) ERC20(_name, _symbol) Ownable(msg.sender) {
         if (_baseToken == address(0)) revert InvalidAddress();
         if (_orderRouter == address(0)) revert InvalidAddress();
         if (_oracleAggregator == address(0)) revert InvalidAddress();
+        if (_assets.length != _weights.length) revert InvalidAmount();
 
         baseToken = IERC20(_baseToken);
         orderRouter = _orderRouter;
         oracleAggregator = _oracleAggregator;
         
-        // Initialize NAV at 1 USDC per share
-        lastNavPerShare = NAV_SCALE;
-        lastNavUpdate = block.timestamp;
-    }
-
-    // ================================
-    // INITIALIZATION
-    // ================================
-
-    /**
-     * @dev Initialize basket composition (called by factory)
-     * @param assets Array of asset addresses
-     * @param weights Array of weights in basis points (must sum to 10000)
-     */
-    function initializeBasket(
-        address[] calldata assets,
-        uint256[] calldata weights
-    ) external onlyOwner {
-        if (basketAssets.length > 0) revert AlreadyInitialized();
-        if (assets.length != weights.length) revert InvalidAmount();
-
-        uint256 totalWeight = 0;
-        for (uint256 i = 0; i < assets.length; i++) {
-            if (assets[i] == address(0)) revert InvalidAddress();
+        // Initialize basket assets and weights
+        for (uint256 i = 0; i < _assets.length; i++) {
+            if (_assets[i] == address(0)) revert InvalidAddress();
             
-            assetAllocations[assets[i]] = AssetAllocation({
-                asset: assets[i],
-                weight: weights[i],
+            assetAllocations[_assets[i]] = AssetAllocation({
+                asset: _assets[i],
+                weight: _weights[i],
                 balance: 0,
                 isActive: false
             });
             
-            basketAssets.push(assets[i]);
-            totalWeight += weights[i];
+            basketAssets.push(_assets[i]);
         }
-
-        if (totalWeight != 10000) revert InvalidAmount();
-
-        emit BasketInitialized(assets, weights);
+        
+        // Initialize NAV at 1 USDC per share
+        lastNavPerShare = NAV_SCALE;
+        lastNavUpdate = block.timestamp;
+        
+        emit BasketInitialized(_assets, _weights);
     }
+
 
     // ================================
     // USER FUNCTIONS
@@ -367,7 +350,6 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
         uint256 usdcAmount
     ) external onlyBot whenNotPaused returns (uint256 assetAmount) {
         AssetAllocation storage allocation = assetAllocations[asset];
-        if (allocation.weight == 0) revert AssetNotInBasket();
         if (usdcAmount > pendingUSDC) revert InvalidAmount();
 
         // Approve OrderRouter to spend USDC
@@ -432,16 +414,32 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
     function updateNAV(uint256[] calldata assetPrices) external onlyBot {
         if (assetPrices.length != basketAssets.length) revert InvalidAmount();
         
-        // Calculate total portfolio value
+        // Calculate total portfolio value (all in USDC 6-decimal scale)
         uint256 totalValue = pendingUSDC;
         
         for (uint256 i = 0; i < basketAssets.length; i++) {
             AssetAllocation memory allocation = assetAllocations[basketAssets[i]];
             if (allocation.balance > 0) {
-                // Convert asset balance to USDC value
-                // assetPrices are in USDC per token with 1e6 scale
-                // For now, assume all assets have 6 decimals to match USDC scale
-                totalValue += (allocation.balance * assetPrices[i]) / 1e6;
+                address asset = basketAssets[i];
+                
+                // Get asset decimals and normalize balance to 6 decimals (USDC scale)
+                uint8 assetDecimals = IERC20Extended(asset).decimals();
+                uint256 normalizedBalance;
+                
+                if (assetDecimals > 6) {
+                    // Asset has more decimals than USDC - divide to normalize
+                    normalizedBalance = allocation.balance / (10 ** (assetDecimals - 6));
+                } else if (assetDecimals < 6) {
+                    // Asset has fewer decimals than USDC - multiply to normalize  
+                    normalizedBalance = allocation.balance * (10 ** (6 - assetDecimals));
+                } else {
+                    // Asset has same decimals as USDC
+                    normalizedBalance = allocation.balance;
+                }
+                
+                // Calculate asset value: normalized balance * price (both in 6 decimals)
+                // Result is in USDC value with 6 decimals
+                totalValue += (normalizedBalance * assetPrices[i]) / 1e6;
             }
         }
 
@@ -519,7 +517,7 @@ contract MultiAssetVault is ERC20, Ownable, ReentrancyGuard, Pausable {
     }
 
     function _calculateUSDCForShares(uint256 shareAmount) internal view returns (uint256) {
-        return (shareAmount * lastNavPerShare) / NAV_SCALE;
+        return (shareAmount * lastNavPerShare) / NAV_SCALE / 1e12; // Convert to 6 decimals (USDC)
     }
 
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {
