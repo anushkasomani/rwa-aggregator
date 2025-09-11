@@ -6,11 +6,35 @@ import StrategyCard from "@/components/strategy/StrategyCard";
 import DeployModal from "@/components/DeployModal";
 import { useWallet } from "@/components/wallet/WalletProvider";
 import { useRouter } from "next/navigation";
+import { ethers } from "ethers";
+import Artifact from "../../abi/Basketfactory.json";
+import { MetaMaskInpageProvider } from "@metamask/providers";
+
+declare global {
+  interface Window {
+    ethereum?: MetaMaskInpageProvider;
+  }
+}
+
+
+const BasketFactoryABI=Artifact.abi
+
+const CONTRACT_ADDRESSES = {
+  BasketFactory: "0x2f7640f44271944d8AcF982F5564Eb67fe93D7C6",
+  USDT: "0xAb231A5744C8E6c45481754928cCfFFFD4aa0732",
+  USDC: "0xB6076C93701D6a07266c31066B298AeC6dd65c2d", // Base token
+  WAVAX: "0xd00ae08403B9bbb9124bB305C09058E32C39A48c", // Main asset
+};
 
 type CurvePoint = { t?: string; time?: string; equity: number };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
 const CREATE_URL = `${API_BASE}/v1/strategies`;
+const tickerToAddress: Record<string, string> = {
+  BTC: CONTRACT_ADDRESSES.WAVAX,
+  ETH: CONTRACT_ADDRESSES.USDT,
+  USDC: CONTRACT_ADDRESSES.USDC,
+  };
 
 export default function BuildPage() {
   const router = useRouter();
@@ -61,51 +85,48 @@ export default function BuildPage() {
   }
 
   // ---- Build API payload for POST /v1/strategies ----
-  function buildCreatePayload() {
+  function buildCreatePayload(assets: string[], weights: number[], vault: string) {
     const plan = state.plan ?? {};
-    const name: string =
-      String(plan?.name || plan?.plan?.name || "Untitled Strategy").slice(0, 120);
-
-    // Clean equity curve: [{t/time, eq}]
+    const name = String(plan?.name || plan?.plan?.name || "Untitled Strategy").slice(0, 120);
     const curve = Array.isArray(state.backtest?.equity_curve)
-      ? (state.backtest?.equity_curve as CurvePoint[]).map((p) => ({
-          t: (p.t || p.time || "").toString(),
-          eq: Number(p.equity),
-        }))
-      : undefined;
-
-    // Small, safe backtest fields (optional)
+    ? (state.backtest?.equity_curve as CurvePoint[]).map((p) => ({
+    t: (p.t || p.time || "").toString(),
+    eq: Number(p.equity),
+    }))
+    : undefined;
     const stats = state.backtest?.stats
-      ? {
-          cagr: numOrNull((state.backtest.stats as any).cagr),
-          sharpe: numOrNull((state.backtest.stats as any).sharpe),
-          stdev: numOrNull((state.backtest.stats as any).stdev),
-          max_dd: numOrNull((state.backtest.stats as any).max_dd),
-          win_rate: numOrNull((state.backtest.stats as any).win_rate),
-          period: (state.backtest.stats as any).period ?? undefined,
-        }
-      : undefined;
-
-    const payload = {
-      name,
-      creator_address: String(address),
-      plan_json: plan,
-      backtest_stats: stats,
-      equity_curve: curve,
-      is_public: true,
-      status: "active" as const,
-      tags: guessTags(plan),
+    ? {
+    cagr: numOrNull((state.backtest.stats as any).cagr),
+    sharpe: numOrNull((state.backtest.stats as any).sharpe),
+    stdev: numOrNull((state.backtest.stats as any).stdev),
+    max_dd: numOrNull((state.backtest.stats as any).max_dd),
+    win_rate: numOrNull((state.backtest.stats as any).win_rate),
+    period: (state.backtest.stats as any).period ?? undefined,
+    }
+    : undefined;
+    return {
+    name,
+    creator_address: String(address),
+    plan_json: plan,
+    backtest_stats: stats,
+    equity_curve: curve,
+    is_public: true,
+    status: "active" as const,
+    tags: guessTags(plan),
+    assets,
+    weights,
+    vault_address: vault,
     };
-
-    return payload;
-  }
-
-  function numOrNull(x: any): number | null {
+    }
+    
+    
+    function numOrNull(x: any): number | null {
     const n = Number(x);
     return Number.isFinite(n) ? n : null;
-  }
-
-  function guessTags(plan: any): string[] {
+    }
+    
+    
+    function guessTags(plan: any): string[] {
     const tags: string[] = [];
     const textPile = JSON.stringify(plan || {}).toLowerCase() + " " + text.toLowerCase();
     if (/\bmomentum|\bbreakout|\btrend|\bema|\bsma|\badx/.test(textPile)) tags.push("momentum");
@@ -113,54 +134,87 @@ export default function BuildPage() {
     if (/\byield|\bstable|\bstablecoin|\bdefillama|\btvl/.test(textPile)) tags.push("yield");
     if (/\brisk|\bmax_weight|\bturnover|\bband/.test(textPile)) tags.push("risk");
     return Array.from(new Set(tags)).slice(0, 5);
+    }
+    // ✅ Here's your updated `BuildPage.tsx` snippet with proper signer handling (based on your MintPage):
+// 🔁 Only the updated activate() function + getSigner() change — rest of your logic is fine.
+
+// Replace your existing `getSigner()` and `activate()` with the following:
+
+async function getSigner(): Promise<ethers.Signer> {
+  if (typeof window !== "undefined" && window.ethereum) {
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    return await provider.getSigner();
+  } else {
+    throw new Error("MetaMask is not available in this browser.");
+  }
+}
+
+async function activate() {
+  if (!address) return setModalOpen(true);
+  if (!state.plan) {
+    setToast({ title: "No plan", description: "Generate a plan first.", tone: "warning" });
+    return;
   }
 
-  // ---- Activate: calls FastAPI → POST /v1/strategies ----
-  async function activate() {
-    if (!address) {
-      setModalOpen(true);
-      return;
+  try {
+    setActivating(true);
+    const signer = await getSigner();
+
+    const plan = state.plan;
+    const name = plan?.name || "Untitled";
+    const symbol = "STRAT";
+    const universe = plan?.universe_list || plan?.universe || [];
+    const assets = universe.map((t) => tickerToAddress[t]);
+    const weights = assets.map(() => 0); // ← dummy zero weights for now
+
+    const basketFactory = new ethers.Contract(
+      CONTRACT_ADDRESSES.BasketFactory,
+      BasketFactoryABI,
+      signer
+    );
+
+    const tx = await basketFactory.createBasket(
+      assets,
+      weights,
+      CONTRACT_ADDRESSES.USDC, // base token
+      name,
+      symbol,
+      { gasLimit: 3_000_000 }
+    );
+
+    const receipt = await tx.wait();
+    const basketAddress = receipt.logs[0]?.address || "0x0000000000000000000000000000000000000000";
+
+    const body = buildCreatePayload(assets, weights, basketAddress);
+
+    const res = await fetch(CREATE_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const msg = await safeText(res);
+      throw new Error(`POST /strategies failed (${res.status}): ${msg}`);
     }
-    if (!state.plan) {
-      setToast({ title: "No plan", description: "Generate a plan first.", tone: "warning" });
-      return;
-    }
 
-    try {
-      setActivating(true);
-      const body = buildCreatePayload();
-      const res = await fetch(CREATE_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key": crypto.randomUUID(),
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        const msg = await safeText(res);
-        throw new Error(`POST /strategies failed (${res.status}): ${msg}`);
-      }
-
-      const json = (await res.json()) as { id: string };
-      setState((s) => ({
-        ...s,
-        review: { name: body.name, address, createdAt: new Date().toISOString(), id: json.id },
-      }));
-      setToast({ title: "Strategy published", description: `#${json.id}`, tone: "success" });
-      setDeployOpen(false);
-
-      // Optional: navigate to Explore or My Strategies
-      // router.push("/explore");      // uncomment if you have this route
-      // router.push(`/me/strategies`); // or user strategies route
-      setStep(4);
-    } catch (e: any) {
-      setToast({ title: "Activate failed", description: String(e?.message || e), tone: "error" });
-    } finally {
-      setActivating(false);
-    }
+    const json = (await res.json()) as { id: string };
+    setState((s) => ({
+      ...s,
+      review: { name: body.name, address, createdAt: new Date().toISOString(), id: json.id },
+    }));
+    setToast({ title: "Strategy published", description: `#${json.id}`, tone: "success" });
+    setDeployOpen(false);
+    setStep(4);
+  } catch (e: any) {
+    setToast({ title: "Activate failed", description: String(e?.message || e), tone: "error" });
+  } finally {
+    setActivating(false);
   }
+}
 
   async function safeText(r: Response) {
     try {

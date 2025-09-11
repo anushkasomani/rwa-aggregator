@@ -124,6 +124,10 @@ class StrategyCreate(BaseModel):
     is_public: bool = True
     status: str = Field(default="active")
     tags: Optional[List[str]] = None
+    # 🔽 NEW FIELDS
+    vault_address: Optional[str] = None
+    initial_weights: Optional[List[float]] = None
+    assets: Optional[List[str]] = None
 
     @field_validator("creator_address")
     @classmethod
@@ -304,6 +308,9 @@ def create_strategy(
         "is_public": payload.is_public,
         "status": payload.status,
         "tags": payload.tags or [],
+        "vault_address": payload.vault_address,
+        "initial_weights": payload.initial_weights,
+        "assets": payload.assets,
     }
 
     # Optional: naive idempotency — upsert by a unique client key (not created here by default)
