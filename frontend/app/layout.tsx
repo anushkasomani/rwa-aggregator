@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import type { Metadata } from "next";
 import "./globals.css";
+import "./strategy.css";
 import { spaceGrotesk, inter } from "./fonts";
 import { ToastProvider } from "@/components/toast/ToastProvider";
 import { WalletProvider } from "@/components/wallet/WalletProvider";
