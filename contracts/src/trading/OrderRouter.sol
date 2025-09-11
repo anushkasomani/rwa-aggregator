@@ -76,9 +76,12 @@ contract OrderRouter {
             amountIn,
             minAmountOut,  // Use the provided minimum
             path,
-            msg.sender,
+            address(this),  // Send tokens to OrderRouter first
             block.timestamp + 300
         );
+        
+        // Transfer the output tokens to the caller
+        IERC20(tokenOut).transfer(msg.sender, amountOut);
         
         return amountOut;
     }
@@ -114,9 +117,12 @@ contract OrderRouter {
             amountIn,
             1,  // Accept any amount (be careful with this!)
             path,
-            msg.sender,
+            address(this),  // Send tokens to OrderRouter first
             block.timestamp + 300
         );
+        
+        // Transfer the output tokens to the caller
+        IERC20(tokenOut).transfer(msg.sender, amountOut);
         
         return amountOut;
     }

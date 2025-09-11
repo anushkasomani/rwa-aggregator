@@ -111,7 +111,7 @@ contract BasketFactory is Ownable, ReentrancyGuard {
         uint256[] memory weights,
         address baseToken,
         string memory name,
-        string memory symbol
+        string memory symbol 
     ) external payable basketCreationNotPaused nonReentrant returns (address basketVault) {
         
         // Basic validations
@@ -131,20 +131,19 @@ contract BasketFactory is Ownable, ReentrancyGuard {
         bytes32 configHash = _calculateConfigHash(assets, weights, baseToken);
         if (basketsByHash[configHash] != address(0)) revert BasketExists();
 
-        // Deploy MultiAssetVault with required dependencies
+        // Deploy MultiAssetVault with all configuration in constructor
         basketVault = address(new MultiAssetVault(
             baseToken,
             string.concat(name, " Vault"),
             string.concat(symbol, "V"),
             orderRouter,
-            oracleAggregator
+            oracleAggregator,
+            assets,
+            weights
         ));
         
-        // Configure vault with basket composition
+        // Get vault reference
         MultiAssetVault vault = MultiAssetVault(basketVault);
-        
-        // Initialize basket configuration
-        vault.initializeBasket(assets, weights);
         
         // Transfer vault ownership to factory owner (enables admin/bot operations)
         vault.transferOwnership(owner());

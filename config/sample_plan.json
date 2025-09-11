@@ -1,0 +1,64 @@
+{
+  "name": "Auto_Expert",
+  "regime": "auto",
+  "direction_bias": "neutral",
+  "universe_list": [
+    "BTC",
+    "ETH"
+  ],
+  "custom_rules": [
+    "close > sma(close, 20)"
+  ],
+  "gates": {
+    "trend": {
+      "ema_short": 50,
+      "ema_long": 200,
+      "adx_min": 20
+    },
+    "range": {
+      "adx_max": 20,
+      "bb_bw_pct_max": 0.3
+    },
+    "breakout": {
+      "donchian_n": 20,
+      "min_vol_mult": 1.5,
+      "adx_rising": true
+    },
+    "support": {
+      "atr_mult": 0.8,
+      "rsi_min": 40
+    },
+    "sentiment": "AUTO"
+  },
+  "weighting": {
+    "mode": "sentiment",
+    "coeffs": {
+      "trend": 0.35,
+      "momentum": 0.35,
+      "volume": 0.15,
+      "sentiment": 0.15
+    },
+    "tilt_sentiment_pct": 0.55
+  },
+  "rebalance": {
+    "cadence": "weekly",
+    "band_pp": 5,
+    "turnover_max": 0.15
+  },
+  "risk": {
+    "max_weight": 0.4,
+    "hard_cap": 0.5,
+    "slippage_max_bps": 80,
+    "order_max_usd": 2000,
+    "cooldown_hours": 6
+  },
+  "execution": {
+    "chunk_usd": 2000,
+    "use_yield": false
+  },
+  "sentiment_cfg": {
+    "good_threshold": 0.3,
+    "bad_threshold": -0.3,
+    "shock_delta_24h": 0.5
+  }
+}
