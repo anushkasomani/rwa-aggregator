@@ -54,8 +54,7 @@ contract BasketFactory is Ownable, ReentrancyGuard {
         address indexed vault,
         address indexed creator,
         address[] assets,
-        uint256[] weights,
-        bytes32 configHash
+        uint256[] weights
     );
     
     event BasketCreationPaused();
@@ -128,8 +127,8 @@ contract BasketFactory is Ownable, ReentrancyGuard {
         _validateAssets(assets, baseToken);
         
         // Check for duplicates
-        bytes32 configHash = _calculateConfigHash(assets, weights, baseToken);
-        if (basketsByHash[configHash] != address(0)) revert BasketExists();
+        // bytes32 configHash = _calculateConfigHash(assets, weights, baseToken);
+        // if (basketsByHash[configHash] != address(0)) revert BasketExists();
 
         // Deploy MultiAssetVault with all configuration in constructor
         basketVault = address(new MultiAssetVault(
@@ -149,7 +148,7 @@ contract BasketFactory is Ownable, ReentrancyGuard {
         vault.transferOwnership(owner());
 
         // Register basket
-        basketsByHash[configHash] = basketVault;
+        // basketsByHash[configHash] = basketVault;
         isValidBasket[basketVault] = true;
         allBaskets.push(basketVault);
         basketsByCreator[msg.sender].push(basketVault);
@@ -159,8 +158,8 @@ contract BasketFactory is Ownable, ReentrancyGuard {
             basketVault,
             msg.sender,
             assets,
-            weights,
-            configHash
+            weights
+            // configHash
         );
     }
 

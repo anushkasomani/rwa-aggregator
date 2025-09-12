@@ -34,15 +34,21 @@ export VAULTS_JSON='[
   {
     "vault": "0xVault1",
     "allowed_tokens": {"USDC":"0x...","ETH":"0xWETH","BTC":"0xWBTC"},
-    "plan": {"path": "/plans/v1.json"}
+    "plan": {"path": "/plans/v1.json"},
+    "strategy_id": "uuid-from-database"
   },
   {
     "vault": "0xVault2",
     "allowed_tokens": {"USDC":"0x...","ETH":"0xWETH","SOL":"0xWSOL"},
     "plan": {"planner_url": "http://localhost:8001/plan", "text": "Basket ETH SOL price > 30D SMA and sentiment good"},
-    "cooldown_hours": 3
+    "cooldown_hours": 3,
+    "strategy_id": "uuid-from-database"
   }
 ]'
+
+# Database (optional) - for strategy weight caching
+export SUPABASE_URL="https://..."
+export SUPABASE_SERVICE_ROLE="..."
 
 Run
 ---
@@ -98,6 +104,12 @@ except Exception:
     def _post_alert(title: str, body: str):
         pass
 
+# Optional: Database integration for strategies
+try:
+    from supabase import create_client, Client as SupabaseClient
+except ImportError:
+    SupabaseClient = None
+
 # --------------------------- Logging setup ----------------------------
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL, format="[%(asctime)s] %(levelname)s - %(message)s")
@@ -129,6 +141,7 @@ class VaultCfg:
     planner_url: Optional[str] = None
     plan_text: Optional[str] = None
     cooldown_hours: Optional[int] = None
+    strategy_id: Optional[str] = None
 
 # ----------------------------- Utilities ------------------------------
 def _json_env(name: str, default: Optional[str] = None) -> dict:
@@ -427,7 +440,8 @@ class Executor:
                  cp_key: str,
                  execution_mode: str = "DRY_RUN",
                  private_key: Optional[str] = None,
-                 cooldown_hours: int = 6):
+                 cooldown_hours: int = 6,
+                 strategy_id: Optional[str] = None):
         self.c = Chain(w3)
         self.plan = plan
         self.vault = VaultClient(self.c, vault_addr, allowed_tokens)
@@ -438,9 +452,82 @@ class Executor:
         self.cooldown_hours = cooldown_hours
         self.last_rebalance_ts: Optional[float] = None
         self.usdc_addr = self.c.w3.to_checksum_address(usdc_addr)
+        self.strategy_id = strategy_id
+        
+        # Initialize database client if available
+        self.db_client: Optional[SupabaseClient] = None
+        if SupabaseClient is not None:
+            supabase_url = os.environ.get("SUPABASE_URL")
+            supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE")
+            if supabase_url and supabase_key:
+                try:
+                    self.db_client = create_client(supabase_url, supabase_key)
+                    log.info("Database client initialized for strategy: %s", strategy_id or "local")
+                except Exception as e:
+                    log.warning("Failed to initialize database client: %s", e)
 
-    # ---- Live target weights (Block 4 math directly; immediate crossover) ----
+    # ---- Database weight operations (READ-ONLY) ----
+    def _get_weights_from_db(self) -> Optional[Dict[str, float]]:
+        """Fetch weights from database if available and fresh."""
+        if not self.db_client or not self.strategy_id:
+            log.debug("No database client or strategy_id available")
+            return None
+        
+        log.info("Attempting to fetch weights from database for strategy: %s", self.strategy_id)
+        
+        try:
+            # Fetch strategy from database
+            result = self.db_client.table("strategies").select("*").eq("id", self.strategy_id).execute()
+            
+            if not result.data:
+                log.warning("Strategy %s not found in database", self.strategy_id)
+                return None
+            
+            strategy = result.data[0]
+            
+            # Get universe and weights
+            plan_json = strategy.get("plan_json", {})
+            universe = plan_json.get("universe") or plan_json.get("universe_list", [])
+            weights_array = strategy.get("weights", [])
+            
+            if not universe or not weights_array:
+                log.info("Missing universe (%s) or weights (%s) for strategy %s", universe, weights_array, self.strategy_id)
+                return None
+            
+            if len(universe) != len(weights_array):
+                log.warning("Universe/weights length mismatch for strategy %s", self.strategy_id)
+                return None
+            
+            # Convert to dict
+            weights_dict = {asset: float(weight) for asset, weight in zip(universe, weights_array)}
+            
+            # Check if weights are meaningful (not all zeros)
+            total_weight = sum(weights_dict.values())
+            log.info("Fetched weights from database for strategy %s: %s (total: %.4f)", 
+                    self.strategy_id, {k: round(v, 4) for k, v in weights_dict.items()}, total_weight)
+            
+            if total_weight == 0:
+                log.debug("All weights are zero for strategy %s, will use fallback calculation", self.strategy_id)
+                return None
+                
+            log.info("Using database weights for strategy %s", self.strategy_id)
+            return weights_dict
+            
+        except Exception as e:
+            log.warning("Error fetching weights from database: %s", e)
+            return None
+
+    # ---- Live target weights (DB-first with fallback to calculation) ----
     def _live_target_weights(self) -> Tuple[Optional[datetime], Dict[str,float]]:
+        # First, try to get weights from database
+        db_weights = self._get_weights_from_db()
+        if db_weights is not None:
+            # Use current timestamp for DB weights
+            return datetime.now(), db_weights
+        
+        # Fallback: Calculate weights locally
+        log.info("Using fallback weight calculation for strategy: %s", self.strategy_id or "local")
+        
         meta = analyze_plan(self.plan)
         assets = meta["assets"]; days = meta["lookback_days"]
         
@@ -775,11 +862,19 @@ class MultiVaultExecutor:
                 cp_key=self.base.get('cp_key',''),
                 execution_mode=self.base['mode'],
                 private_key=self.base.get('private_key'),
-                cooldown_hours=v.cooldown_hours or self.base.get('cooldown_hours', 6)
+                cooldown_hours=v.cooldown_hours or self.base.get('cooldown_hours', 6),
+                strategy_id=v.strategy_id
             )
             self.executors.append(ex)
 
     def _load_plan(self, v: VaultCfg) -> dict:
+        # First, try to load from database if strategy_id is provided
+        if v.strategy_id and SupabaseClient is not None:
+            db_plan = self._load_plan_from_db(v.strategy_id)
+            if db_plan is not None:
+                return db_plan
+        
+        # Fallback to existing methods
         if v.plan_path:
             with open(v.plan_path,'r') as f: return json.load(f)
         if v.planner_url and v.plan_text:
@@ -794,6 +889,33 @@ class MultiVaultExecutor:
             "rebalance":{"cadence":"weekly","band_pp":5.0,"turnover_max":0.15,"hard_cap":0.50},
             "risk":{"max_weight":0.40,"slippage_max_bps":80,"order_max_usd":2000,"cooldown_hours":6}
         }
+
+    def _load_plan_from_db(self, strategy_id: str) -> Optional[dict]:
+        """Load strategy plan from database."""
+        try:
+            supabase_url = os.environ.get("SUPABASE_URL")
+            supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE")
+            if not supabase_url or not supabase_key:
+                return None
+            
+            db_client = create_client(supabase_url, supabase_key)
+            result = db_client.table("strategies").select("plan_json").eq("id", strategy_id).execute()
+            
+            if not result.data:
+                log.warning("Strategy %s not found in database for plan loading", strategy_id)
+                return None
+            
+            plan_json = result.data[0].get("plan_json", {})
+            if not plan_json:
+                log.warning("No plan_json found for strategy %s", strategy_id)
+                return None
+            
+            log.info("Loaded plan from database for strategy: %s", strategy_id)
+            return plan_json
+            
+        except Exception as e:
+            log.warning("Error loading plan from database for strategy %s: %s", strategy_id, e)
+            return None
 
     def run_once(self):
         for ex in self.executors:
@@ -849,7 +971,8 @@ if __name__ == "__main__":
                 plan_path=(item.get('plan') or {}).get('path'),
                 planner_url=(item.get('plan') or {}).get('planner_url'),
                 plan_text=(item.get('plan') or {}).get('text'),
-                cooldown_hours=item.get('cooldown_hours')
+                cooldown_hours=item.get('cooldown_hours'),
+                strategy_id=item.get('strategy_id')
             ))
     else:
         # Single-vault fallback from legacy envs

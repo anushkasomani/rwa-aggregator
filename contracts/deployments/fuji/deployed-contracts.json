@@ -1,11 +1,11 @@
 {
   "network": "fuji",
-  "timestamp": "2025-09-11T13:55:50.943Z",
+  "timestamp": "2025-09-11T20:32:22.260Z",
   "deployer": "0x71C70066F9D1128126a1A5e36Dee8FAfF4C55d30",
   "contracts": {
-    "OracleAggregator": "0x740cb8DAB2A6B241c11b964A639281142A99d757",
-    "OrderRouter": "0x133Cd7cb0864BA40Df106679a1Da44F28d55f3dd",
-    "BasketFactory": "0x2f7640f44271944d8AcF982F5564Eb67fe93D7C6"
+    "OracleAggregator": "0xD041d15E11208d53F98001c6D6fe64743b512632",
+    "OrderRouter": "0xf08ac74DFcF065A884BA2d55bc63442855A44e69",
+    "BasketFactory": "0xE303b305aeF742cCBB538B8Ce2d31Eadf2F6bD0C"
   },
   "external": {
     "LB_FACTORY": "0xb43120c4745967fa9b93E79C149E66B0f2D6Fe0c",
@@ -14,4 +14,4 @@
     "USDC": "0xB6076C93701D6a07266c31066B298AeC6dd65c2d",
     "WAVAX": "0xd00ae08403B9bbb9124bB305C09058E32C39A48c"
   }
-}
+} 
