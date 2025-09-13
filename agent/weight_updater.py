@@ -261,7 +261,7 @@ def main():
     parser.add_argument("--once", action="store_true", help="Run once and exit")
     parser.add_argument("--daemon", action="store_true", help="Run continuously")
     parser.add_argument("--force", action="store_true", help="Force update all weights regardless of changes")
-    parser.add_argument("--interval", type=int, default=1800, help="Update interval in seconds (default: 1800s/30min)")
+    parser.add_argument("--interval", type=int, default=120, help="Update interval in seconds (default: 120s/2min)")
     
     args = parser.parse_args()
     

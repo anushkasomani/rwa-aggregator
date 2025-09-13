@@ -18,7 +18,8 @@ BAD_THRESH  = -0.30
 COEFFS_DEFAULT = {"trend":0.40, "mom":0.30, "vol":0.20, "sent":0.10}
 MAX_LOOKBACK_D = 540
 REB_FREQ = "W-FRI"
-COINGECKO_IDS = {"BTC":"bitcoin","ETH":"ethereum","SOL":"solana"}
+COINGECKO_IDS = {"BTC":"bitcoin","ETH":"ethereum","SOL":"solana","WAVAX":"avalanche-2"}
+STABLECOINS = {"USDT", "USDC", "DAI", "BUSD", "FRAX"}  # Assets to skip price analysis
 
 # ===== Patterns (names lowercased) =====
 BULLISH_KEYS = {
@@ -1161,9 +1162,24 @@ def compute_weights_now(
 
     # Data
     used_cg_fallback = []
+    stablecoins_skipped = []
     if ohlcv is None:
         ohlcv = {}
         for a in assets:
+            # Skip price data loading for stablecoins (they're stable ~$1)
+            if a.upper() in STABLECOINS:
+                # Create dummy OHLCV data for stablecoins (all prices = 1.0)
+                dates = pd.date_range(end=datetime.now(timezone.utc), periods=lookback_days, freq='D', tz='UTC')
+                ohlcv[a] = pd.DataFrame({
+                    'open': [1.0] * lookback_days,
+                    'high': [1.0] * lookback_days,
+                    'low': [1.0] * lookback_days,
+                    'close': [1.0] * lookback_days,
+                    'volume': [1000000.0] * lookback_days  # Dummy volume
+                }, index=dates)
+                stablecoins_skipped.append(a)
+                continue
+                
             try:
                 ohlcv[a] = _load_ohlcv(a, lookback_days, exchange_id)
             except Exception:
@@ -1172,6 +1188,9 @@ def compute_weights_now(
 
     if used_cg_fallback:
         warnings.append(f"Fallback to CoinGecko for {used_cg_fallback}; High/Low are approximated, ATR/Donchian/CMF/MFI may be degraded.")
+    
+    if stablecoins_skipped:
+        warnings.append(f"Stablecoins {stablecoins_skipped} use dummy price data (stable at $1.00) - no price analysis performed.")
 
     if sentiment is None:
         if cp_key:

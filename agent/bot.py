@@ -53,7 +53,7 @@ export SUPABASE_SERVICE_ROLE="..."
 Run
 ---
 python agent/bot.py --once        # one cycle across all vaults
-python agent/bot.py               # loop; interval via EXEC_INTERVAL (default 600s)
+python agent/bot.py               # loop; interval via EXEC_INTERVAL (default 120s)
 """
 from __future__ import annotations
 import os, sys, json, time, logging, dataclasses
@@ -61,6 +61,7 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+load_dotenv("services/.env")
 
 # Add parent directory to Python path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -843,14 +844,28 @@ class Executor:
 
 # --------------------------- Multi-vault runner -----------------------
 class MultiVaultExecutor:
-    def __init__(self, w3: Web3, base_cfg: dict, vaults: List[VaultCfg]):
+    def __init__(self, w3: Web3, base_cfg: dict, vaults: Optional[List[VaultCfg]] = None):
         self.w3 = w3
         self.base = base_cfg
-        self.vcfgs = vaults
         self.executors: List[Executor] = []
+        
+        # Use database-driven vault discovery if no vaults provided
+        if vaults is None:
+            vaults = self._discover_vaults_from_db()
+        
+        self.vcfgs = vaults
+        
         for v in self.vcfgs:
-            # Load plan per vault
-            plan = self._load_plan(v)
+            # Load plan from database (strategy_id is required for DB-driven approach)
+            if v.strategy_id:
+                plan = self._load_plan_from_db(v.strategy_id)
+                if plan is None:
+                    log.warning("Could not load plan for strategy %s, skipping vault %s", v.strategy_id, v.vault)
+                    continue
+            else:
+                # Fallback to old method
+                plan = self._load_plan(v)
+            
             ex = Executor(
                 w3,
                 plan=plan,
@@ -866,6 +881,91 @@ class MultiVaultExecutor:
                 strategy_id=v.strategy_id
             )
             self.executors.append(ex)
+    
+    def _discover_vaults_from_db(self) -> List[VaultCfg]:
+        """Discover active vaults from database strategies."""
+        if SupabaseClient is None:
+            log.warning("Database not available, cannot discover vaults")
+            return []
+        
+        try:
+            # Get database credentials
+            supabase_url = os.environ.get("SUPABASE_URL")
+            supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE")
+            
+            if not supabase_url or not supabase_key:
+                log.warning("Database credentials missing, cannot discover vaults")
+                return []
+            
+            # Create database client
+            db = create_client(supabase_url, supabase_key)
+            
+            # Query strategies with vault addresses
+            result = db.table("strategies").select("*").eq("status", "active").not_.is_("vault_address", "null").execute()
+            
+            if not result.data:
+                log.warning("No active strategies with vault addresses found in database")
+                return []
+            
+            vaults = []
+            for strategy in result.data:
+                vault_addr = strategy.get("vault_address")
+                strategy_id = strategy.get("id")
+                plan_json = strategy.get("plan_json", {})
+                
+                if not vault_addr or not strategy_id:
+                    continue
+                
+                # Extract universe from plan to determine allowed tokens
+                universe = plan_json.get("universe") or plan_json.get("universe_list", [])
+                
+                # Create allowed_tokens mapping (this needs to be configured based on your token addresses)
+                allowed_tokens = self._generate_allowed_tokens(universe)
+                
+                # Get cooldown from plan or use default
+                cooldown_hours = plan_json.get("risk", {}).get("cooldown_hours", 6)
+                
+                vault_cfg = VaultCfg(
+                    vault=vault_addr,
+                    allowed_tokens=allowed_tokens,
+                    strategy_id=strategy_id,
+                    cooldown_hours=cooldown_hours
+                )
+                
+                vaults.append(vault_cfg)
+                log.info("Discovered vault %s linked to strategy %s (%s assets)", 
+                        vault_addr[:10] + "...", strategy_id[:8] + "...", len(universe))
+            
+            log.info("Database-driven discovery found %d vaults", len(vaults))
+            return vaults
+            
+        except Exception as e:
+            log.error("Error discovering vaults from database: %s", e)
+            return []
+    
+    def _generate_allowed_tokens(self, universe: List[str]) -> Dict[str, str]:
+        """Generate allowed_tokens mapping based on universe."""
+        # This mapping should be configurable - for now using your current addresses
+        TOKEN_ADDRESSES = {
+            "USDC": "0xB6076C93701D6a07266c31066B298AeC6dd65c2d",
+            "USDT": "0xAb231A5744C8E6c45481754928cCfFFFD4aa0732", 
+            "WAVAX": "0xd00ae08403B9bbb9124bB305C09058E32C39A48c",
+            "AVAX": "0xd00ae08403B9bbb9124bB305C09058E32C39A48c",  # Same as WAVAX
+            # Add more tokens as needed
+            "BTC": "0xAb231A5744C8E6c45481754928cCfFFFD4aa0732",  # Placeholder
+            "ETH": "0xd00ae08403B9bbb9124bB305C09058E32C39A48c",   # Placeholder  
+            "SOL": "0xB6076C93701D6a07266c31066B298AeC6dd65c2d"    # Placeholder
+        }
+        
+        allowed_tokens = {}
+        for asset in universe:
+            if asset in TOKEN_ADDRESSES:
+                allowed_tokens[asset] = TOKEN_ADDRESSES[asset]
+            else:
+                log.warning("No address configured for asset %s, using USDC as placeholder", asset)
+                allowed_tokens[asset] = TOKEN_ADDRESSES["USDC"]  # Fallback
+        
+        return allowed_tokens
 
     def _load_plan(self, v: VaultCfg) -> dict:
         # First, try to load from database if strategy_id is provided
@@ -922,7 +1022,7 @@ class MultiVaultExecutor:
             log.info("=== Vault %s ===", ex.vault.vault)
             ex.run_vault_cycle()  # Use enhanced MultiAssetVault cycle by default
 
-    def run_loop(self, interval_sec: int = 600):
+    def run_loop(self, interval_sec: int = 120):
         while True:
             self.run_once()
             time.sleep(interval_sec)
@@ -932,7 +1032,7 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="Executor Bot (multi-vault; EOA or Dry-Run)")
     p.add_argument('--once', action='store_true', help='Run a single cycle and exit')
-    p.add_argument('--interval', type=int, default=int(os.environ.get('EXEC_INTERVAL', '600')), help='Loop interval seconds')
+    p.add_argument('--interval', type=int, default=int(os.environ.get('EXEC_INTERVAL', '120')), help='Loop interval seconds')
     p.add_argument('--plan', type=str, default=os.environ.get('PLAN_JSON_PATH', ''), help='Path to plan.json (single-vault fallback)')
     p.add_argument('--planner-url', type=str, default=os.environ.get('PLANNER_URL', ''), help='Planner URL (single-vault fallback)')
     p.add_argument('--text', type=str, default=os.environ.get('PLAN_TEXT', ''), help='Planner text (single-vault fallback)')
@@ -976,20 +1076,30 @@ if __name__ == "__main__":
             ))
     else:
         # Single-vault fallback from legacy envs
-        vaddr = os.environ.get('VAULT_ADDRESS') or '<vault>'
-        allowed_tokens = _json_env('VAULT_ALLOWED_TOKENS') or {
-            "USDC": os.environ.get('USDC','<usdc>'),
-            "WAVAX": os.environ.get('WAVAX','<weth>'),
-            "USDT": os.environ.get('USDT','<usdt>'),
-        }
-        print("Allowed tokens:", allowed_tokens)
-        # Load plan if provided
-        plan_path = args.plan if (args.plan and os.path.exists(args.plan)) else None
-        planner_url = args.planner_url
-        plan_text = args.text
-        vaults = [VaultCfg(vault=vaddr, allowed_tokens=allowed_tokens, plan_path=plan_path, planner_url=planner_url, plan_text=plan_text)]
+        vaddr = os.environ.get('VAULT_ADDRESS')
+        if vaddr:
+            allowed_tokens = _json_env('VAULT_ALLOWED_TOKENS') or {
+                "USDC": os.environ.get('USDC','<usdc>'),
+                "WAVAX": os.environ.get('WAVAX','<weth>'),
+                "USDT": os.environ.get('USDT','<usdt>'),
+            }
+            print("Allowed tokens:", allowed_tokens)
+            # Load plan if provided
+            plan_path = args.plan if (args.plan and os.path.exists(args.plan)) else None
+            planner_url = args.planner_url
+            plan_text = args.text
+            vaults = [VaultCfg(vault=vaddr, allowed_tokens=allowed_tokens, plan_path=plan_path, planner_url=planner_url, plan_text=plan_text)]
+        else:
+            # No VAULT_ADDRESS set, will use database discovery
+            vaults = None
 
-    runner = MultiVaultExecutor(w3, base_cfg, vaults)
+    # Use database-driven discovery if no VAULTS_JSON provided
+    if not vaults:
+        log.info("No VAULTS_JSON configuration found, using database-driven vault discovery")
+        runner = MultiVaultExecutor(w3, base_cfg)  # vaults=None triggers DB discovery
+    else:
+        log.info("Using VAULTS_JSON configuration with %d vaults", len(vaults))
+        runner = MultiVaultExecutor(w3, base_cfg, vaults)
     if args.once:
         runner.run_once()
     else:
