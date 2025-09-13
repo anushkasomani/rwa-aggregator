@@ -1123,6 +1123,184 @@ def _normalize_plan(raw: Dict) -> Tuple[Dict, List[str]]:
     return plan, warn
 
 # ==========================================================
+# =============== STABLECOIN PAIR ALLOCATOR ===============
+# ==========================================================
+
+def _classify_gate_for_group(expr: str) -> str:
+    """Classify a gate into scoring groups for soft aggregation."""
+    e = str(expr).upper()
+    if any(x in e for x in ["SMA", "EMA", "DONCHIAN", "BB_"]):
+        return "trend_gates"
+    if any(x in e for x in ["RSI", "ADX", "RET_", "MACD", "STOCH_RSI"]):
+        return "momentum_gates"
+    if any(x in e for x in ["VOLUME", "VOL_", "OBV", "CMF", "MFI"]):
+        return "volume_gates"
+    if "SENTIMENT" in e:
+        return "sentiment_gates"
+    return "momentum_gates"
+
+def _soft_group_scores_at_now(
+    soft_gates: list,
+    df: pd.DataFrame,
+    sent_series: Optional[pd.Series]
+) -> Dict[str, float]:
+    """Compute group-averaged soft gate scores in [0,1] at the latest bar."""
+    if df is None or df.empty:
+        return {}
+
+    group_vals: Dict[str, list] = {"trend_gates": [], "momentum_gates": [], "volume_gates": [], "sentiment_gates": []}
+    for g in soft_gates or []:
+        expr = g.get("expr", "")
+        if not expr:
+            continue
+        score = float(_evaluate_gate_weighted(expr, df, sent_series))
+        group = _classify_gate_for_group(expr)
+        group_vals[group].append(score)
+
+    out: Dict[str, float] = {}
+    for grp, arr in group_vals.items():
+        if arr:
+            out[grp] = float(sum(arr)/len(arr))
+    return out
+
+def compute_stablecoin_pair_allocation(
+    raw_plan: Dict,
+    feat_tables: Dict[str, pd.DataFrame],
+    sentiment_by_asset: Dict[str, pd.Series],
+    asset_symbol: str = "WAVAX",
+    cash_symbol: str = "USDT",
+    gamma: Optional[float] = None,
+    tau: Optional[float] = None
+) -> Dict:
+    """
+    Allocator for stablecoin pairs (e.g., WAVAX/USDT).
+    Returns smooth allocation based on signal strength rather than competing scores.
+    """
+    plan, warnings = _normalize_plan(raw_plan)
+
+    # Configuration with defaults
+    alloc_cfg = plan.get("allocator", {})
+    gamma = float(alloc_cfg.get("gamma", gamma if gamma is not None else 1.25))
+    tau = float(alloc_cfg.get("tau", tau if tau is not None else 0.20))
+
+    risk = plan.get("risk", {})
+    w_max = float(risk.get("max_weight", 0.8))  # Max allocation to risky asset
+    
+    # Gate weights for soft aggregation
+    gate_weights = plan.get("gate_weights", {
+        "trend_gates": 0.4,
+        "momentum_gates": 0.3,
+        "volume_gates": 0.2,
+        "sentiment_gates": 0.1
+    })
+
+    # Sentiment thresholds
+    sent_cfg = plan.get("sentiment_cfg", {})
+    good = float(sent_cfg.get("good_threshold", 0.30))
+    bad = float(sent_cfg.get("bad_threshold", -0.30))
+
+    # Separate hard vs soft gates
+    raw_custom = [str(r).strip() for r in (raw_plan.get("custom_rules") or []) if str(r).strip()]
+    hard_gates_exprs = []
+    for rr in raw_custom:
+        rr_up = rr.upper()
+        rr_up = re.sub(r"SMA\(CLOSE\s*,\s*", "SMA(", rr_up)
+        rr_up = re.sub(r"EMA\(CLOSE\s*,\s*", "EMA(", rr_up)
+        hard_gates_exprs.append(rr_up)
+
+    all_of = [(g or {}) for g in (plan.get("gates", {}) or {}).get("all_of", [])]
+    any_of = [(g or {}) for g in (plan.get("gates", {}) or {}).get("any_of", [])]
+
+    def _exprs(lst): 
+        return [str(x.get("expr","")).strip() for x in lst if str(x.get("expr","")).strip()]
+
+    soft_pool_exprs = _exprs(all_of) + _exprs(any_of)
+    hard_set_norm = set([_replace_gate_tokens(e) for e in hard_gates_exprs])
+    soft_gates = []
+    for e in soft_pool_exprs:
+        if _replace_gate_tokens(e) in hard_set_norm:
+            continue
+        soft_gates.append({"expr": e})
+
+    # Get data
+    df = feat_tables.get(asset_symbol)
+    sent = sentiment_by_asset.get(asset_symbol)
+    if df is None or df.empty:
+        raise RuntimeError(f"No feature table for {asset_symbol}")
+
+    # Check hard gates - must all pass
+    hard_pass = True
+    for expr in hard_gates_exprs:
+        s_bin = _evaluate_gate(expr, df, sent)
+        ok = bool(s_bin.iloc[-1]) if len(s_bin) else False
+        if not ok:
+            hard_pass = False
+            break
+
+    if not hard_pass:
+        return {
+            "as_of": df.index.max().isoformat(),
+            "target_weights": {asset_symbol: 0.0, cash_symbol: 1.0},
+            "explain": [f"Hard gate failed → 100% {cash_symbol}"],
+            "warnings": warnings
+        }
+
+    # Calculate soft gate scores by group
+    group_scores = _soft_group_scores_at_now(soft_gates, df, sent)
+    present_groups = [k for k in group_scores.keys()]
+    denom = sum(gate_weights.get(k, 0.0) for k in present_groups) or 1.0
+    E_soft = sum(gate_weights.get(k, 0.0)*group_scores[k] for k in present_groups) / denom
+    E_soft = max(0.0, min(1.0, float(E_soft)))
+
+    # Optional sentiment tilt
+    tau = max(0.0, min(1.0, float(tau)))
+    if tau > 0.0:
+        S_now = 0.0
+        if sent is not None and len(sent):
+            try:
+                S_now = float(sent.iloc[-1])
+            except Exception:
+                S_now = 0.0
+        if good != bad:
+            S_pos = max(0.0, (S_now - bad) / (good - bad))
+        else:
+            S_pos = 0.0
+        E_tilt = (1.0 - tau)*E_soft + tau*S_pos
+    else:
+        E_tilt = E_soft
+
+    # Apply curvature (gamma >= 1 makes allocation more conservative)
+    gamma = max(1.0, float(gamma))
+    A = max(0.0, min(1.0, E_tilt)) ** gamma
+
+    # Final allocation
+    w_asset = min(float(w_max), A)
+    w_asset = max(0.0, min(1.0, w_asset))
+    w_cash = 1.0 - w_asset
+
+    # Create explanation
+    bullets = []
+    if "SMA_20" in df.columns:
+        px = df["close"].iloc[-1]
+        sma20 = df["SMA_20"].iloc[-1]
+        if pd.notna(px) and pd.notna(sma20) and sma20 != 0:
+            drift = (px/sma20 - 1)*100.0
+            bullets.append(f"price {drift:+.1f}% vs SMA20")
+    
+    for k in ("trend_gates", "momentum_gates", "volume_gates", "sentiment_gates"):
+        if k in group_scores:
+            bullets.append(f"{k.replace('_',' ').replace('gates','')}: {group_scores[k]:.2f}")
+    
+    bullets.append(f"soft_score={E_soft:.2f}, tilt_score={E_tilt:.2f}, curvature γ={gamma:.2f}")
+
+    return {
+        "as_of": df.index.max().isoformat(),
+        "target_weights": {asset_symbol: w_asset, cash_symbol: w_cash},
+        "explain": bullets,
+        "warnings": warnings
+    }
+
+# ==========================================================
 # =============== PUBLIC ENTRYPOINT (CALL THIS) ============
 # ==========================================================
 def compute_weights_now(
@@ -1156,6 +1334,56 @@ def compute_weights_now(
     """
     plan, warnings = _normalize_plan(plan)
     assets = plan.get("universe") or ["BTC","ETH","SOL"]
+    
+    # Check if this is a stablecoin pair and use specialized allocator
+    stablecoins_in_universe = [a for a in assets if a.upper() in STABLECOINS]
+    volatile_assets = [a for a in assets if a.upper() not in STABLECOINS]
+    
+    # If we have exactly 1 stablecoin and 1 volatile asset, use the specialized allocator
+    if len(assets) == 2 and len(stablecoins_in_universe) == 1 and len(volatile_assets) == 1:
+        stablecoin = stablecoins_in_universe[0]
+        volatile = volatile_assets[0]
+        
+        # Load features for the volatile asset only
+        feats_needed = _features_from_gates(plan)
+        lookback_days = lookback_override_days or _lookback_days_from_feats(feats_needed)
+        
+        # Data loading
+        if ohlcv is None:
+            ohlcv = {}
+            try:
+                ohlcv[volatile] = _load_ohlcv(volatile, lookback_days, exchange_id)
+            except Exception:
+                ohlcv[volatile] = _cg_market_chart_range(volatile, "usd", lookback_days)
+        
+        if sentiment is None:
+            if cp_key:
+                heads = _fetch_cryptopanic_headlines(cp_key)
+                sentiment = _sentiment_series_by_asset(heads)
+            else:
+                sentiment = {}
+        
+        # Derived features for volatile asset only
+        feat_tables = _derive_features(ohlcv, feats_needed)
+        
+        # Use the specialized stablecoin pair allocator
+        result = compute_stablecoin_pair_allocation(
+            raw_plan=dict(plan),  # Pass original plan
+            feat_tables=feat_tables,
+            sentiment_by_asset=sentiment,
+            asset_symbol=volatile,
+            cash_symbol=stablecoin
+        )
+        
+        # Add additional fields for compatibility
+        result["eligibility"] = {volatile: 1.0, stablecoin: 1.0}  # Both always eligible
+        result["scores"] = {
+            volatile: result["target_weights"].get(volatile, 0.0),
+            stablecoin: result["target_weights"].get(stablecoin, 0.0)
+        }
+        result["features_used"] = feats_needed
+        
+        return result
 
     feats_needed = _features_from_gates(plan)
     lookback_days = lookback_override_days or _lookback_days_from_feats(feats_needed)
