@@ -6,7 +6,7 @@ module.exports = {
   async rewrites() {
     return [
       { source: "/api/health",   destination: `${API}/health` },
-      { source: "/api/plan",     destination: `${API}/plan` },
+      { source: "/api/plan",     destination: `${API2}/plan` },
       { source: "/api/backtest", destination: `${API2}/backtest` },
     ];
   },
